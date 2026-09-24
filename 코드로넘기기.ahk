@@ -25,7 +25,7 @@
 SetWorkingDir A_ScriptDir
 SetTitleMatchMode 2
 
-global appVersion   := "1.4.3"      ; 바꾸면 CHANGELOG.md 에도 적는다
+global appVersion   := "1.5.0"      ; 바꾸면 CHANGELOG.md 에도 적는다
 global profileDir   := A_ScriptDir "\사이트"
 global settingFile  := A_ScriptDir "\코드로넘기기.ini"
 global dumpFile     := A_ScriptDir "\코드목록.txt"
@@ -108,6 +108,9 @@ global sessionPct := Map()         ; 차시 번호 → 진도율 (학습창 목�
 global endedSince := 0             ; '끝남' 표시를 처음 본 시각 (안내창이 뜰 틈을 준다)
 global noticeSeen := Map()         ; 이미 알린 모르는 안내창 글
 global awaitFresh := 0             ; 차시를 넘긴 시각. 새 영상이 도는 것을 볼 때까지 '끝남' 을 믿지 않는다 (0 이면 아님)
+global chkOnTop                    ; 진행 중에는 강의 창을 항상 위에
+global topHwnd := 0                ; 진행 중 항상 위로 두고 있는 강의 창
+global topOwned := false           ; 그 항상 위를 이 프로그램이 켰는지 (원래 항상 위였으면 끝날 때 풀지 않는다)
 global chkAutoSession              ; 본체 창의 '다음 차시 자동' (설정 창의 chkNextSession 과 같이 움직임)
 global chkNextSession
 global staticSince  := 0           ;   그 시각
@@ -279,7 +282,7 @@ BuildGui()
 BuildSettingsGui()
 {
     global gui1, gui3
-    global chkNext, chkPlay, chkQuizBeep, chkEndClose, chkTelegram, chkAwake, chkNoFront
+    global chkNext, chkPlay, chkQuizBeep, chkEndClose, chkTelegram, chkAwake, chkNoFront, chkOnTop
     global editToken, editChat, rdOvlBig, rdOvlSmall, rdOvlHidden, editAsidePx, ddTarget
     global hkCtlStart, hkCtlAside, hkCtlDump, chkQuizAuto, editQuizWait, chkQuizForce, ddAsideSide, chkNextSession
     global editTickSec, editLastSession, txtSessionInfo
@@ -336,7 +339,12 @@ BuildSettingsGui()
     UiLabel(gui3, "x+8 yp-1 w40 h28 +0x200", "초")
     UiNote(gui3, "x" (L + 26) " y+4 w" (colW - 26), "느리게 둘수록 가볍습니다. 영상이 도는 중에는 끝날 때까지 알아서 더 쉽니다.")
     chkNoFront := gui3.Add("CheckBox", "x" L " y+9 w" colW " Checked", "브라우저 창을 절대 앞으로 가져오지 않는다")
-    leftLast := UiNote(gui3, "x" (L + 26) " y+3 w" (colW - 26), "다른 작업 중에 강의 창이 앞으로 튀어나오지 않습니다.")
+    UiNote(gui3, "x" (L + 26) " y+3 w" (colW - 26), "다른 작업 중에 강의 창이 앞으로 튀어나오지 않습니다.")
+    UiChoice(gui3)
+    chkOnTop := gui3.Add("CheckBox", "x" L " y+9 w" colW " Checked", "진행 중에는 강의 창을 항상 위에 둔다")
+    chkOnTop.OnEvent("Click", (*) => (SaveSettings(), chkOnTop.Value ? Tick() : ReleaseOnTop()))
+    leftLast := UiNote(gui3, "x" (L + 26) " y+3 w" (colW - 26), "다른 창을 전체 화면으로 써도 강의가 멈추지 않습니다."
+        . "`n강의 창은 작게 두거나 F11 로 밀어 두세요. (정지·종료하면 풀립니다)")
 
     ; ================= 오른쪽 칸 =================
     UiSection(gui3, "작업 중 화면", colW, "x" R, "y" top)
@@ -721,7 +729,7 @@ OpenProfileDir()
 LoadSettings()
 {
     global settingFile, profName, settingsLoaded, tgToken, tgChat, ovlMode, hkStart, hkAside, hkDump
-    global chkNext, chkPlay, chkQuizBeep, chkEndClose, chkTelegram, chkAwake, chkNoFront
+    global chkNext, chkPlay, chkQuizBeep, chkEndClose, chkTelegram, chkAwake, chkNoFront, chkOnTop
     global editToken, editChat, editAsidePx, ddAsideSide, rdOvlBig, rdOvlSmall, rdOvlHidden, chkQuizAuto, editQuizWait, chkQuizForce, chkNextSession
     global editTickSec, editLastSession, chkAutoSession
     global asideSideSet
@@ -745,6 +753,7 @@ LoadSettings()
             chkTelegram.Value := IniRead(settingFile, "기본", "텔레그램알림", 1)
             chkAwake.Value := IniRead(settingFile, "기본", "잠들지않기", 1)
             chkNoFront.Value := IniRead(settingFile, "기본", "창앞으로안가져오기", 1)
+            chkOnTop.Value := IniRead(settingFile, "기본", "강의창항상위", 1)
             ovlMode := IniRead(settingFile, "기본", "오버레이", "크게")
             px := IniRead(settingFile, "기본", "밀어둘때보일픽셀", 6)
             asideSideSet := IniRead(settingFile, "기본", "밀어둘쪽", "자동")
@@ -793,7 +802,7 @@ LoadSettings()
 SaveSettings()
 {
     global settingFile, profName, settingsLoaded, tgToken, tgChat, ovlMode, hkStart, hkAside, hkDump
-    global chkNext, chkPlay, chkQuizBeep, chkEndClose, chkTelegram, chkAwake, chkNoFront
+    global chkNext, chkPlay, chkQuizBeep, chkEndClose, chkTelegram, chkAwake, chkNoFront, chkOnTop
     global editToken, editChat, chkQuizAuto, chkQuizForce, chkNextSession
 
     if !settingsLoaded
@@ -817,6 +826,7 @@ SaveSettings()
         IniWrite(chkTelegram.Value, settingFile, "기본", "텔레그램알림")
         IniWrite(chkAwake.Value, settingFile, "기본", "잠들지않기")
         IniWrite(chkNoFront.Value, settingFile, "기본", "창앞으로안가져오기")
+        IniWrite(chkOnTop.Value, settingFile, "기본", "강의창항상위")
         IniWrite(ovlMode, settingFile, "기본", "오버레이")
         IniWrite(AsidePx(), settingFile, "기본", "밀어둘때보일픽셀")
         IniWrite(AsideSide(), settingFile, "기본", "밀어둘쪽")
@@ -1289,6 +1299,7 @@ Stop(msg := "")
     running := false
     RefreshHotkeyLabels()
     KeepAwake(false)
+    ReleaseOnTop()
 
     if (msg != "")
         SetState(msg)
@@ -1381,6 +1392,7 @@ TickBody()
 
     title := WinGetTitle("ahk_id " hwnd)
     txtWindow.Text := title
+    KeepOnTop(hwnd)
 
     ; 같은 브라우저 창에서 다른 탭(예: GitHub)을 보고 있으면 강의 화면이 아니다.
     ;   이 프로그램은 창에서 '지금 보이는 탭' 만 읽으므로, 그대로 두면 엉뚱한 페이지의 숫자를
@@ -1956,6 +1968,7 @@ CleanUpOnExit()
     global asideSaved
 
     KeepAwake(false)
+    try ReleaseOnTop()
 
     if IsObject(asideSaved)
         try RestoreAside()
@@ -2067,6 +2080,49 @@ RestoreAside()
     asideHwnd := 0
     RefreshHotkeyLabels()
     SetState("강의 창을 원래 자리로 되돌렸습니다.")
+}
+
+; --------------------------------------------------
+; 진행 중에는 강의 창을 항상 위에 ([설정] → 시스템, 기본 켜짐)
+;   다른 창을 전체 화면으로 써도 강의 창이 완전히 덮이지 않아, 브라우저가 영상을 멈추지 않는다.
+;   강의 창이 바뀌면 새 창으로 옮기고, 정지·종료하면 푼다.
+;   밀어둔 창(F11)은 밀어두기가 따로 항상 위를 관리하므로 여기서 풀지 않는다.
+;   원래 항상 위였던 창(사용자가 PowerToys 등으로 켜 둔 것)은 끝날 때도 그대로 둔다.
+; --------------------------------------------------
+KeepOnTop(hwnd)
+{
+    global running, chkOnTop, topHwnd, topOwned
+
+    want := running && IsObject(chkOnTop) && chkOnTop.Value && hwnd
+
+    if (topHwnd && (!want || topHwnd != hwnd))
+        ReleaseOnTop()
+
+    if !want
+        return
+
+    try {
+        isTop := WinGetExStyle("ahk_id " hwnd) & 0x8          ; 0x8 = 항상 위
+
+        if (topHwnd != hwnd) {
+            topHwnd := hwnd
+            topOwned := !isTop          ; 처음 볼 때 이미 항상 위면 사용자가 켜 둔 것
+        }
+
+        if !isTop
+            WinSetAlwaysOnTop(true, "ahk_id " hwnd)
+    }
+}
+
+ReleaseOnTop()
+{
+    global topHwnd, topOwned, asideSaved, asideHwnd
+
+    if (topHwnd && topOwned && !(IsObject(asideSaved) && asideHwnd = topHwnd) && WinExist("ahk_id " topHwnd))
+        try WinSetAlwaysOnTop(false, "ahk_id " topHwnd)
+
+    topHwnd := 0
+    topOwned := false
 }
 
 ; --------------------------------------------------
@@ -4534,7 +4590,9 @@ StateText(st)
 
     if (st.quiz && quizNote != "")
         lines.Push("           " quizNote)
-    lines.Push("창       : " (covered ? "다른 창에 완전히 가려짐 → 이러면 영상이 멈춥니다" : "보임 (정상)"))
+    global topHwnd
+    lines.Push("창       : " (covered ? "다른 창에 완전히 가려짐 → 이러면 영상이 멈춥니다" : "보임 (정상)")
+        . (topHwnd ? "   · 항상 위" : ""))
 
     if (st.notice != "")
         lines.Push("안내     : " st.notice)
