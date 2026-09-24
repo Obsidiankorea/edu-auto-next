@@ -25,7 +25,7 @@
 SetWorkingDir A_ScriptDir
 SetTitleMatchMode 2
 
-global appVersion   := "1.4.2"      ; 바꾸면 CHANGELOG.md 에도 적는다
+global appVersion   := "1.4.3"      ; 바꾸면 CHANGELOG.md 에도 적는다
 global profileDir   := A_ScriptDir "\사이트"
 global settingFile  := A_ScriptDir "\코드로넘기기.ini"
 global dumpFile     := A_ScriptDir "\코드목록.txt"
@@ -134,6 +134,7 @@ SetTimer(OverlayGuess, 1000)                ; 오버레이 시계만 혼자 흐�
 Tick()
 SetTimer(() => CheckUpdate(true), -4000)   ; 켜고 조금 뒤 GitHub 에 새 버전이 있는지 조용히 확인
 OnExit((*) => CleanUpOnExit())
+OnError(LogError)                           ; 오류가 나면 코드로넘기기_기록.txt 에 남긴다
 
 ; --------------------------------------------------
 ; 화면
@@ -909,6 +910,37 @@ TelegramTest()
         MsgBox("텔레그램으로 시험 메시지를 보냈습니다.", "보냈습니다", "0x40040 Owner" gui3.Hwnd)
     else
         MsgBox("보내지 못했습니다.`n`n" err, "보내지 못함", "0x40030 Owner" gui3.Hwnd)
+}
+
+; --------------------------------------------------
+; 오류 기록
+;   오류 창은 닫으면 내용이 사라지므로, 오류가 나면 코드로넘기기_기록.txt 에 남긴다.
+;   (시각, 버전, 오류, 줄, 호출 경로. GitHub 에는 올리지 않음)
+;   다른 일을 하는 동안 오류 창이 떠서 멈춰 있지 않도록, 창은 띄우지 않고
+;   같은 오류는 한 번만 소리·텔레그램으로 알린다. 화면 읽기는 다음 차례에 그대로 이어진다.
+; --------------------------------------------------
+LogError(e, mode)
+{
+    global appVersion
+
+    static told := Map()
+
+    line := e.HasProp("Line") ? e.Line : "?"
+    extra := (e.HasProp("Extra") && e.Extra != "") ? "`n자세히: " e.Extra : ""
+
+    try FileAppend("===== " FormatTime(, "yyyy-MM-dd HH:mm:ss") "   v" appVersion "`n"
+        . Type(e) ": " e.Message extra "`n"
+        . "줄 " line (e.HasProp("What") && e.What != "" ? "  (" e.What ")" : "") "`n"
+        . (e.HasProp("Stack") ? e.Stack : "") "`n", A_ScriptDir "\코드로넘기기_기록.txt", "UTF-8")
+
+    key := e.Message "@" line
+
+    if !told.Has(key) {
+        told[key] := true
+        try Notify("프로그램 오류가 나서 기록했습니다 (코드로넘기기_기록.txt). " e.Message " / 줄 " line)
+    }
+
+    return 1          ; 오류 창은 띄우지 않는다
 }
 
 ; --------------------------------------------------
@@ -3308,12 +3340,13 @@ GoNextSession(st)
 
             ; 영상 창을 닫으면 화면이 새로 그려지므로, 차시 표를 다시 읽어 같은 번호의 버튼을 누른다
             fresh := SessionRows(root, rule)
+            replaced := false
 
             for row in fresh {
-                if (row.num = num && !IsObject(target.fresh)) {
+                if (row.num = num && !replaced) {
                     ObjRelease(target.el)
                     target.el := row.el
-                    target.fresh := true
+                    replaced := true
                 } else {
                     ObjRelease(row.el)
                 }
@@ -3779,7 +3812,7 @@ CloseLectureWindow()
 ResetForProgress()
 {
     global lastTimeVal, lastTimeTick, lastTimeMovedTick, lastPageVal, doneNotified
-    global staticPage, staticSince, quizLatchPage
+    global staticPage, staticSince, quizLatchPage, videoWrapped
 
     lastTimeVal := -1
     lastTimeTick := 0
