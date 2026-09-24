@@ -25,7 +25,7 @@
 SetWorkingDir A_ScriptDir
 SetTitleMatchMode 2
 
-global appVersion   := "1.3.3"      ; 바꾸면 CHANGELOG.md 에도 적는다
+global appVersion   := "1.4.0"      ; 바꾸면 CHANGELOG.md 에도 적는다
 global profileDir   := A_ScriptDir "\사이트"
 global settingFile  := A_ScriptDir "\코드로넘기기.ini"
 global dumpFile     := A_ScriptDir "\코드목록.txt"
@@ -84,6 +84,9 @@ global quizWhy      := ""          ; 자동으로 못 넘긴 까닭
 global quizGoneTick := 0           ; 퀴즈가 안 보이기 시작한 시각
 global quizLatchPage := -1         ; 영상 없는 퀴즈 페이지로 알아본 페이지 번호
 global quizStarted  := false       ; 이 페이지에서 [문제풀이] 시작 버튼을 눌렀는지
+global quizTried    := Map()       ; 이 퀴즈에서 이미 눌러 본 답 (오답이면 다른 답을 누르려고)
+global quizLastKey  := ""          ; 마지막으로 누른 답
+global quizLastName := ""
 global staticPage   := -1          ; 영상도 퀴즈도 없는 페이지를 처음 본 페이지 번호
 global sessionNum   := 0           ; 지금 보고 있는 차시 번호
 global videoWrapped := false       ; 영상이 끝나고 시간이 0으로 되돌아갔는지
@@ -2158,7 +2161,7 @@ WatchReadable(st)
 AutoQuiz(root, st)
 {
     global quizStep, quizTick, quizPage, quizTries, quizStuck, quizNote, quizFail, quizWhy, holdUntil, pressCount, lastPressError
-    global chkQuizForce, forceGaveUp, quizStarted
+    global chkQuizForce, forceGaveUp, quizStarted, quizTried, quizLastKey, quizLastName
 
     ; 페이지가 바뀌면 처음부터
     if (st.pageCur != quizPage) {
@@ -2169,6 +2172,8 @@ AutoQuiz(root, st)
         quizStuck := false
         quizWhy := ""
         quizStarted := false
+        quizTried := Map()
+        quizLastKey := "", quizLastName := ""
         ResetForce()
     }
 
@@ -2204,23 +2209,36 @@ AutoQuiz(root, st)
             return QuizNeedsPerson(st, quizWhy)
         }
 
-        el := FindQuizAnswer(root)
+        el := FindQuizAnswer(root, quizTried)
+
+        ; 모든 답을 눌러 봤으면 (모두 오답 표시) 더 누르지 않고 넘기러 간다
+        if (!el && quizTried.Count) {
+            quizStep := 1
+            quizTick := A_TickCount - QuizWaitSec() * 1000
+            quizNote := "모든 답을 눌러 봤습니다. 넘깁니다."
+            return
+        }
 
         if !el
             return QuizFailOnce(st, "누를 답을 찾지 못했습니다.")
 
         answer := Trim(U_Str(el, 23))
+        key := AnswerKey(el)
         how := PressElement(el)
         ObjRelease(el)
 
         if (how = "")
             return QuizFailOnce(st, "답을 누르지 못했습니다" (lastPressError != "" ? " (" lastPressError ")" : "") ".")
 
+        quizTried[key] := true
+        quizLastKey := key
+        quizLastName := (answer != "") ? SubStr(answer, 1, 20) : "답"
         quizFail := 0
         quizTries += 1
         quizStep := 1
         quizTick := A_TickCount
-        quizNote := "'" (answer != "" ? SubStr(answer, 1, 20) : "답") "' 을(를) 눌렀습니다. " QuizWaitSec() "초 뒤에 넘깁니다."
+        quizNote := "'" quizLastName "' 을(를) 눌렀습니다. " QuizWaitSec() "초 뒤에 넘깁니다."
+            . (quizTried.Count > 1 ? " (" quizTried.Count "번째 답)" : "")
         return
     }
 
@@ -2228,8 +2246,22 @@ AutoQuiz(root, st)
         left := QuizWaitSec() - (A_TickCount - quizTick) // 1000
 
         if (left > 0) {
-            quizNote := "답을 눌렀습니다. " left "초 뒤에 넘깁니다."
+            quizNote := "'" quizLastName "' 을(를) 눌렀습니다. " left "초 뒤에 넘깁니다."
             return
+        }
+
+        ; 누른 답에 오답 표시가 붙었고, 아직 안 눌러 본 답이 있으면 그것을 누른다
+        ;   (틀린 채로 넘기면 그 페이지가 진도에 들어가지 않는 사이트가 있다. 산업안전포털)
+        if (quizLastKey != "" && QuizAnswerWrong(root, quizLastKey)) {
+            el := FindQuizAnswer(root, quizTried)
+
+            if el {
+                ObjRelease(el)
+                quizTries -= 1          ; 오답이라 다시 누르는 것은 '넘기기 실패' 로 세지 않는다
+                quizStep := 0
+                quizNote := "'" quizLastName "' 은(는) 오답입니다. 다른 답을 누릅니다."
+                return
+            }
         }
 
         ; 1) 퀴즈 안에 확인 / 제출 / 다음 같은 버튼이 있으면 그것 (페이지 '다음' 보다 먼저)
@@ -2344,7 +2376,10 @@ QuizWaitSec()
 ResetQuiz()
 {
     global quizStep, quizTries, quizStuck, quizNote, quizPage, quizFail, quizWhy, quizStarted
+    global quizTried, quizLastKey, quizLastName
 
+    quizTried := Map()
+    quizLastKey := "", quizLastName := ""
     quizWhy := ""
     quizStarted := false
     ResetForce()
@@ -2359,18 +2394,104 @@ ResetQuiz()
 ; --------------------------------------------------
 ; 퀴즈에서 누를 답 하나 (사용 후 ObjRelease). 못 찾으면 0
 ; --------------------------------------------------
-FindQuizAnswer(root)
+FindQuizAnswer(root, tried := "")
 {
     sel := P("문제풀이", "보기")
 
     if (sel != "") {
-        el := FindSel(root, sel)
+        hit := 0
 
-        if el
-            return el
+        ; 프로필의 보기 가운데 아직 안 눌러 본 첫 번째 (O 가 오답이면 X)
+        for el in FindAllSel(root, sel) {
+            if (!hit && U_HasSize(el) && !(IsObject(tried) && tried.Has(AnswerKey(el))))
+                hit := el
+            else
+                ObjRelease(el)
+        }
+
+        if hit
+            return hit
     }
 
-    return FindAnyAnswer(root)
+    return FindAnyAnswer(root, tried)
+}
+
+; 답 하나를 알아보는 열쇠: 이름 + 자리. 누른 뒤 class 가 바뀌어도(check wrong) 같은 답으로 본다
+AnswerKey(el)
+{
+    r := Buffer(16, 0)
+    try ComCall(43, el, "ptr", r)
+
+    return Trim(U_Str(el, 23)) "@" NumGet(r, 0, "int") "," NumGet(r, 4, "int")
+}
+
+; 마지막으로 누른 답에 오답 표시가 붙었는지 ([문제풀이] 오답표시, class·이름에서 찾는 정규식)
+QuizAnswerWrong(root, key)
+{
+    static cond := 0
+
+    if !cond {
+        for ct in [50000, 50013, 50002, 50005, 50007] {
+            c := U_CondInt(30003, ct)
+            cond := cond ? U_Or(cond, c) : c
+        }
+    }
+
+    pat := "i)" P("문제풀이", "오답표시", "\bwrong\b|incorrect|오답|틀렸")
+    wrong := false
+
+    for el in U_FindAll(root, cond) {
+        if (!wrong && AnswerKey(el) = key && RegExMatch(U_Str(el, 30) " " U_Str(el, 23), pat))
+            wrong := true
+
+        ObjRelease(el)
+    }
+
+    return wrong
+}
+
+; 규칙에 맞는 요소 모두 (웹페이지 안에서만). 사용 후 하나씩 ObjRelease
+FindAllSel(root, sel)
+{
+    out := []
+
+    for alt in StrSplit(sel, "||") {
+        terms := []
+
+        for piece in StrSplit(Trim(alt), "&&") {
+            t := ParseTerm(Trim(piece))
+
+            if IsObject(t)
+                terms.Push(t)
+        }
+
+        if !terms.Length
+            continue
+
+        cond := U_Cond(terms[1].prop, terms[1].val, terms[1].exact)
+
+        if !cond
+            continue
+
+        for el in U_FindAll(root, cond) {
+            ok := true
+
+            Loop terms.Length - 1
+                if !TermMatch(el, terms[A_Index + 1]) {
+                    ok := false
+                    break
+                }
+
+            if (ok && InWebPage(el))
+                out.Push(el)
+            else
+                ObjRelease(el)
+        }
+
+        ObjRelease(cond)
+    }
+
+    return out
 }
 
 ; 일반 규칙으로 '아무 답이나' 고른다.
@@ -2380,7 +2501,7 @@ FindQuizAnswer(root)
 ;   재생·다음·이전·닫기 같은 조작 버튼과 프로필의 버튼은 누르지 않는다.
 ;   링크는 퀴즈 영역 안에 있을 때만 (다른 페이지로 가 버릴 수 있으므로)
 ;   점수가 50 이 안 되면 아무것도 누르지 않는다 (엉뚱한 것을 누르지 않게)
-FindAnyAnswer(root)
+FindAnyAnswer(root, tried := "")
 {
     static cond := 0
 
@@ -2401,7 +2522,7 @@ FindAnyAnswer(root)
     bestScore := -1
 
     for el in U_FindAll(box, cond) {
-        score := AnswerScore(el, quizRect, scopeRect, controls)
+        score := (IsObject(tried) && tried.Has(AnswerKey(el))) ? -1 : AnswerScore(el, quizRect, scopeRect, controls)
 
         if (score > bestScore) {
             if best
