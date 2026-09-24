@@ -25,7 +25,7 @@
 SetWorkingDir A_ScriptDir
 SetTitleMatchMode 2
 
-global appVersion   := "1.4.1"      ; 바꾸면 CHANGELOG.md 에도 적는다
+global appVersion   := "1.4.2"      ; 바꾸면 CHANGELOG.md 에도 적는다
 global profileDir   := A_ScriptDir "\사이트"
 global settingFile  := A_ScriptDir "\코드로넘기기.ini"
 global dumpFile     := A_ScriptDir "\코드목록.txt"
@@ -342,7 +342,7 @@ BuildSettingsGui()
     UiLabel(gui3, "x" R " y+12 w70 h30 +0x200", "오버레이")
     UiChoice(gui3)
     rdOvlBig    := gui3.Add("Radio", "x+4 yp w64 h30 Checked Group", "크게")
-    rdOvlSmall  := gui3.Add("Radio", "x+2 yp w112 h30", "작게  ▶ 4/8")
+    rdOvlSmall  := gui3.Add("Radio", "x+2 yp w112 h30", "작게 (두 줄)")
     rdOvlHidden := gui3.Add("Radio", "x+2 yp w64 h30", "숨김")
     rdOvlBig.OnEvent("Click", (*) => SetOverlayMode("크게"))
     rdOvlSmall.OnEvent("Click", (*) => SetOverlayMode("작게"))
@@ -1528,15 +1528,19 @@ BuildOverlay()
 
     if small {
         ; ▶ 2/5차시 4/8p
+        ;   02:31/17:43        ← 아랫줄은 작은 글씨로 시간
         ow := Round(190 * k)
-        oh := Round(40 * k)
+        oh := Round(58 * k)
         radius := Round(16 * k)
 
         ovl.SetFont("s12 norm", "Segoe UI Symbol")
-        ovlIcon := ovl.Add("Text", Format("x{1} y0 w{2} h{3} Center +0x200", Round(8 * k), Round(28 * k), oh), "")
+        ovlIcon := ovl.Add("Text", Format("x{1} y{2} w{3} h{4} Center +0x200", Round(8 * k), Round(3 * k), Round(28 * k), Round(30 * k)), "")
 
         ovl.SetFont("s13 bold", OverlayFont())
-        ovlPage := ovl.Add("Text", Format("x{1} y0 w{2} h{3} +0x200", Round(38 * k), ow - Round(42 * k), oh), "-/-")
+        ovlPage := ovl.Add("Text", Format("x{1} y{2} w{3} h{4} +0x200", Round(38 * k), Round(3 * k), ow - Round(42 * k), Round(30 * k)), "-/-")
+
+        ovl.SetFont("s10 bold", OverlayFont())
+        ovlTime := ovl.Add("Text", Format("x{1} y{2} w{3} h{4} +0x200", Round(38 * k), Round(31 * k), ow - Round(42 * k), Round(22 * k)), "")
     } else {
         ;       6/8
         ;   ▶ 12:02/14:44
@@ -1630,7 +1634,9 @@ UpdateOverlay(st := "", note := "")
     ses := (sessionNum > 0) ? sessionNum (sessionTotal > 0 ? "/" sessionTotal : "") "차시" : ""
     pg := (st.pageTotal > 0) ? st.pageCur "/" st.pageTotal "p" : ""
     page := (ses != "" && pg != "") ? ses " " pg : (ses pg != "" ? ses pg : "-/-")
-    time := (st.timeTotal > 0) ? SecText(st.timeCur) "/" SecText(st.timeTotal) : "--:--/--:--"
+    ; 전체 시간이 안 나오는 플레이어는 지금 시간만
+    time := (st.timeTotal > 0) ? SecText(st.timeCur) "/" SecText(st.timeTotal)
+        : (st.timeCur >= 0 ? SecText(st.timeCur) : "--:--/--:--")
 
     readable := (st.playKnown || st.timeText != "" || st.pageTotal > 0 || st.quiz)
     ended := (st.timeTotal > 0 && st.timeCur >= st.timeTotal - 1) || videoWrapped || st.ended
@@ -1759,6 +1765,9 @@ SetOverlay(page, time, video, emo, word, look)
 
         if (ovlPage.Text != text)
             ovlPage.Text := text
+
+        if (ovlTime.Text != time)
+            ovlTime.Text := time
     } else {
         ; ---- 크게: 페이지 / ▶ 시간 / 이모지
         if (ovlPage.Text != page)
