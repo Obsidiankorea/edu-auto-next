@@ -25,7 +25,7 @@
 SetWorkingDir A_ScriptDir
 SetTitleMatchMode 2
 
-global appVersion   := "1.3.2"      ; 바꾸면 CHANGELOG.md 에도 적는다
+global appVersion   := "1.3.3"      ; 바꾸면 CHANGELOG.md 에도 적는다
 global profileDir   := A_ScriptDir "\사이트"
 global settingFile  := A_ScriptDir "\코드로넘기기.ini"
 global dumpFile     := A_ScriptDir "\코드목록.txt"
@@ -3195,8 +3195,24 @@ GoNextSession(st)
     before := P("차시", "넘기기전")
 
     if (sameWindow && before != "") {
-        if PressByName(root, before)
-            Sleep 1500
+        if PressByName(root, before) {
+            Sleep 2000
+
+            ; 영상 창을 닫으면 화면이 새로 그려지므로, 차시 표를 다시 읽어 같은 번호의 버튼을 누른다
+            fresh := SessionRows(root, rule)
+
+            for row in fresh {
+                if (row.num = num && !IsObject(target.fresh)) {
+                    ObjRelease(target.el)
+                    target.el := row.el
+                    target.fresh := true
+                } else {
+                    ObjRelease(row.el)
+                }
+            }
+        } else {
+            Notify("다음 차시로 가기 전에 '" before "' 을(를) 누르지 못했습니다. 영상 창을 직접 닫아 주세요.")
+        }
     }
 
     how := PressElement(target.el)
@@ -3343,7 +3359,7 @@ SessionRowsByButton(root, sel)
     if !IsObject(t)
         return rows
 
-    cond := U_Cond(t.prop, t.val)
+    cond := U_Cond(t.prop, t.val, t.exact)
 
     if !cond
         return rows
@@ -3359,7 +3375,7 @@ SessionRowsByButton(root, sel)
 
             tt := ParseTerm(Trim(piece))
 
-            if (IsObject(tt) && !InStr(U_Str(el, tt.idx), tt.val))
+            if (IsObject(tt) && !TermMatch(el, tt))
                 ok := false
         }
 
@@ -4578,7 +4594,7 @@ FindOne(root, expr)
     if !terms.Length
         return 0
 
-    cond := U_Cond(terms[1].prop, terms[1].val)
+    cond := U_Cond(terms[1].prop, terms[1].val, terms[1].exact)
 
     if !cond
         return 0
@@ -4590,13 +4606,16 @@ FindOne(root, expr)
         ok := true
 
         Loop terms.Length - 1 {
-            t := terms[A_Index + 1]
-
-            if !InStr(U_Str(el, t.idx), t.val) {
+            if !TermMatch(el, terms[A_Index + 1]) {
                 ok := false
                 break
             }
         }
+
+        ; 브라우저 자체의 버튼(탭 닫기·창 닫기·주소창 등)은 어떤 규칙으로도 잡지 않는다.
+        ; 'class:close && name:닫기' 가 브라우저 탭의 닫기 버튼(TabCloseButton)에도 맞았다.
+        if (ok && !InWebPage(el))
+            ok := false
 
         if (ok && !hit && U_IsShown(el))
             hit := el
@@ -4618,6 +4637,39 @@ FindOne(root, expr)
     return backup
 }
 
+; 요소가 조건 하나에 맞는지 (따옴표로 적었으면 정확히 같아야 함)
+TermMatch(el, t)
+{
+    s := U_Str(el, t.idx)
+
+    return t.exact ? (s = t.val) : InStr(s, t.val)
+}
+
+; 웹페이지(문서) 안에 있는 요소인지. 브라우저 틀(탭 줄·주소창·창 버튼)은 문서 밖에 있다
+InWebPage(el)
+{
+    cur := U_Parent(el)
+
+    Loop 60 {
+        if !cur
+            return false
+
+        if (U_Int(cur, 21) = 50030) {          ; 문서
+            ObjRelease(cur)
+            return true
+        }
+
+        up := U_Parent(cur)
+        ObjRelease(cur)
+        cur := up
+    }
+
+    if cur
+        ObjRelease(cur)
+
+    return false
+}
+
 ParseTerm(piece)
 {
     p := InStr(piece, ":")
@@ -4628,17 +4680,23 @@ ParseTerm(piece)
     kind := Trim(SubStr(piece, 1, p - 1))
     val := Trim(SubStr(piece, p + 1))
 
+    ; 따옴표로 감싸면 '정확히 같은 것' 만 (예: class:"close" 는 closeMenu·TabCloseButton 을 뺀다)
+    exact := false
+
+    if (StrLen(val) >= 2 && SubStr(val, 1, 1) = '"' && SubStr(val, -1) = '"')
+        val := SubStr(val, 2, StrLen(val) - 2), exact := true
+
     if (val = "")
         return ""
 
     if (kind = "class")
-        return {prop: 30012, idx: 30, val: val}
+        return {prop: 30012, idx: 30, val: val, exact: exact}
 
     if (kind = "id")
-        return {prop: 30011, idx: 29, val: val}
+        return {prop: 30011, idx: 29, val: val, exact: exact}
 
     if (kind = "name")
-        return {prop: 30005, idx: 23, val: val}
+        return {prop: 30005, idx: 23, val: val, exact: exact}
 
     return ""
 }
@@ -4803,7 +4861,7 @@ UIA()
 }
 
 ; 글자 속성 조건 (부분 일치 + 대소문자 무시)
-U_Cond(propId, value)
+U_Cond(propId, value, exact := false)
 {
     var := Buffer(A_PtrSize = 8 ? 24 : 16, 0)
     NumPut("ushort", 8, var, 0)
@@ -4811,7 +4869,8 @@ U_Cond(propId, value)
     NumPut("ptr", bstr, var, 8)
 
     cond := 0
-    try ComCall(24, UIA(), "int", propId, "ptr", var, "int", 3, "ptr*", &cond)
+    ; 1 = 대소문자 무시, 2 = 부분 일치. 정확히 같은 것만 찾을 때는 부분 일치를 뺀다
+    try ComCall(24, UIA(), "int", propId, "ptr", var, "int", exact ? 1 : 3, "ptr*", &cond)
 
     if bstr
         DllCall("oleaut32\SysFreeString", "ptr", bstr)
