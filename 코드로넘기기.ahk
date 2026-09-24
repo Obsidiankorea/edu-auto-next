@@ -25,7 +25,7 @@
 SetWorkingDir A_ScriptDir
 SetTitleMatchMode 2
 
-global appVersion   := "1.3.1"      ; 바꾸면 CHANGELOG.md 에도 적는다
+global appVersion   := "1.3.2"      ; 바꾸면 CHANGELOG.md 에도 적는다
 global profileDir   := A_ScriptDir "\사이트"
 global settingFile  := A_ScriptDir "\코드로넘기기.ini"
 global dumpFile     := A_ScriptDir "\코드목록.txt"
@@ -3423,7 +3423,8 @@ SessionRowsByButton(root, sel)
                     num := Integer(tx.text), numX := tx.x
             } else if RegExMatch(tx.text, "^(\d{1,3})\s*%$", &mp) {
                 pct := Integer(mp[1])
-            } else if (tx.text != bname && tx.text != "-" && StrLen(tx.text) > StrLen(name)) {
+            } else if (tx.text != bname && !RegExMatch(tx.text, "^[\d\s.:/\-]+$") && StrLen(tx.text) > StrLen(name)) {
+                ; 날짜·시간·숫자만 있는 칸('2026.09.24 17:38:01', '-')은 이름이 아니다
                 name := tx.text
             }
         }
