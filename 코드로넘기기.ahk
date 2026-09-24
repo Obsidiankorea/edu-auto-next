@@ -25,7 +25,7 @@
 SetWorkingDir A_ScriptDir
 SetTitleMatchMode 2
 
-global appVersion   := "1.3.0"      ; 바꾸면 CHANGELOG.md 에도 적는다
+global appVersion   := "1.3.1"      ; 바꾸면 CHANGELOG.md 에도 적는다
 global profileDir   := A_ScriptDir "\사이트"
 global settingFile  := A_ScriptDir "\코드로넘기기.ini"
 global dumpFile     := A_ScriptDir "\코드목록.txt"
@@ -1342,7 +1342,7 @@ TickBody()
     global running, txtWindow, txtCount, pressCount, holdUntil, prof
     global readGapMs
     global lastTimeVal, lastTimeTick, lastTimeMovedTick, lastPageVal, covered, quizLatchPage, sessionNum, videoWrapped
-    global lastTotalVal
+    global lastTotalVal, lectureHwnd
 
     static lastAt := 0
 
@@ -1366,7 +1366,40 @@ TickBody()
         return
     }
 
-    txtWindow.Text := WinGetTitle("ahk_id " hwnd)
+    title := WinGetTitle("ahk_id " hwnd)
+    txtWindow.Text := title
+
+    ; 같은 브라우저 창에서 다른 탭(예: GitHub)을 보고 있으면 강의 화면이 아니다.
+    ;   이 프로그램은 창에서 '지금 보이는 탭' 만 읽으므로, 그대로 두면 엉뚱한 페이지의 숫자를
+    ;   페이지 번호로 읽거나 버튼을 찾아 누를 수 있다. 강의 탭이 돌아올 때까지 아무것도 하지 않는다.
+    ;   (창을 직접 고른 경우는 제목이 프로필과 다를 수 있으므로 따지지 않는다)
+    static tabGoneSince := 0, tabGoneNotified := false
+    global pinnedHwnd
+    key := P("사이트", "창제목")
+
+    if (!pinnedHwnd && key != "" && !InStr(title, key)) {
+        if !tabGoneSince
+            tabGoneSince := A_TickCount
+
+        lectureHwnd := 0          ; 강의 탭을 다른 창으로 옮겼으면 다음 번에 그 창을 찾도록
+
+        if running {
+            SetState("강의 탭이 앞에 있지 않습니다. 그 창에서 다른 탭을 보고 있습니다."
+                . "`n지금 보이는 탭: " title
+                . "`n강의 탭을 다시 눌러 주세요. 그동안은 아무것도 누르지 않습니다."
+                . "`n(다른 사이트는 새 창(Ctrl+N)에서 열면 강의에 영향이 없습니다)")
+
+            if (!tabGoneNotified && A_TickCount - tabGoneSince > 30000) {
+                tabGoneNotified := true
+                Notify("강의 탭이 앞에 있지 않아 넘기지 못하고 있습니다. 강의 탭을 다시 눌러 주세요.")
+            }
+        }
+
+        UpdateOverlay("", "탭 바뀜")
+        return
+    }
+
+    tabGoneSince := 0, tabGoneNotified := false
 
     root := 0
     try ComCall(6, UIA(), "ptr", hwnd, "ptr*", &root)
@@ -1599,6 +1632,7 @@ UpdateOverlay(st := "", note := "")
 
     static shortWord := Map(
         "강의 창 없음", "창 없음",
+        "탭 바뀜", "탭 바뀜",
         "화면 못 읽음", "못 읽음",
         "프로필 없음", "프로필 없음"
     )
