@@ -25,7 +25,7 @@
 SetWorkingDir A_ScriptDir
 SetTitleMatchMode 2
 
-global appVersion   := "1.4.0"      ; 바꾸면 CHANGELOG.md 에도 적는다
+global appVersion   := "1.4.1"      ; 바꾸면 CHANGELOG.md 에도 적는다
 global profileDir   := A_ScriptDir "\사이트"
 global settingFile  := A_ScriptDir "\코드로넘기기.ini"
 global dumpFile     := A_ScriptDir "\코드목록.txt"
@@ -324,7 +324,7 @@ BuildSettingsGui()
     UiLabel(gui3, "x" (L + 26) " y+9 w70 h28 +0x200", "채팅 ID")
     editChat := gui3.Add("Edit", "x+6 yp+1 w150", "")
     gui3.Add("Button", "x+8 yp-2 w" (colW - 26 - 70 - 6 - 150 - 8) " h30", "시험 보내기").OnEvent("Click", (*) => TelegramTest())
-    UiNote(gui3, "x" (L + 26) " y+6 w" (colW - 26), "기존 '나라배움터' 설정이 있으면 자동으로 가져옵니다.")
+    UiNote(gui3, "x" (L + 26) " y+6 w" (colW - 26), "봇 토큰과 채팅 ID 는 이 PC 의 설정 파일에만 저장됩니다.")
 
     UiSection(gui3, "시스템", colW, "x" L)
     UiChoice(gui3)
@@ -757,10 +757,6 @@ LoadSettings()
         }
     }
 
-    ; 처음이면 기존 '나라배움터' 설정에서 텔레그램 정보를 가져온다
-    if (tgToken = "" || tgChat = "")
-        ImportTelegramFromOldIni()
-
     ; 예전 설정값도 받아 준다 (1 → 크게, 0 → 숨김, 보통 → 크게)
     if (ovlMode = "1" || ovlMode = "보통")
         ovlMode := "크게"
@@ -791,24 +787,6 @@ LoadSettings()
     ; 이제부터 저장해도 된다 (읽기 전에 저장하면 기본값으로 덮어써 버린다)
     settingsLoaded := true
     SaveSettings()
-}
-
-ImportTelegramFromOldIni()
-{
-    global tgToken, tgChat
-
-    old := A_ScriptDir "\나라배움터.ini"
-
-    if !FileExist(old)
-        return
-
-    try {
-        if (tgToken = "")
-            tgToken := IniRead(old, "알림", "텔레그램토큰", "")
-
-        if (tgChat = "")
-            tgChat := IniRead(old, "알림", "텔레그램채팅ID", "")
-    }
 }
 
 SaveSettings()
