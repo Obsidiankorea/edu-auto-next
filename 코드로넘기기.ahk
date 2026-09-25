@@ -48,6 +48,10 @@ global lastTimeTick := 0
 global lastTimeMovedTick := 0      ; 재생 시간이 실제로 바뀐 것을 마지막으로 본 시각
 global lastPageVal  := -1
 global doneNotified := false
+global chkDonePopup               ; 다 들으면 알림 창 (설정)
+global courseDone   := false      ; 다 들었음 (다시 시작할 때까지 오버레이를 초록 '완료' 로 둔다)
+global doneMsg      := ""         ; 다 들었을 때의 말
+global pulseStep    := 0          ; 다 들었을 때 오버레이가 은은하게 밝아졌다 돌아오는 장면 번호
 
 global tgToken      := ""          ; 텔레그램 봇 토큰
 global tgChat       := ""          ; 텔레그램 채팅 ID
@@ -304,7 +308,7 @@ BuildGui()
 BuildSettingsGui()
 {
     global gui1, gui3
-    global chkNext, chkPlay, chkQuizBeep, chkEndClose, chkTelegram, chkAwake, chkNoFront, chkOnTop
+    global chkNext, chkPlay, chkQuizBeep, chkEndClose, chkTelegram, chkAwake, chkNoFront, chkOnTop, chkDonePopup
     global editToken, editChat, rdOvlBig, rdOvlSmall, rdOvlHidden, editAsidePx, ddTarget
     global hkCtlStart, hkCtlAside, hkCtlDump, chkQuizAuto, editQuizWait, chkQuizForce, ddAsideSide, chkNextSession
     global editTickSec, editLastSession, txtSessionInfo
@@ -344,6 +348,7 @@ BuildSettingsGui()
     UiChoice(gui3)
     chkQuizBeep := gui3.Add("CheckBox", "x" L " y+12 w" colW " Checked", "문제풀이가 뜨면 소리로 알린다")
     chkTelegram := gui3.Add("CheckBox", "x" L " y+9 w" colW " Checked", "문제풀이·완료·멈춤을 텔레그램으로 알린다")
+    chkDonePopup := gui3.Add("CheckBox", "x" L " y+9 w" colW " Checked", "다 들으면 알림 창을 띄운다")
 
     UiLabel(gui3, "x" (L + 26) " y+12 w70 h28 +0x200", "봇 토큰")
     editToken := gui3.Add("Edit", "x+6 yp+1 w" (colW - 102) " Password", "")
@@ -418,7 +423,7 @@ BuildSettingsGui()
     editLastSession := gui3.Add("Edit", "x+6 yp+1 w60 Number Center", "")
     UiLabel(gui3, "x+8 yp-1 w170 h28 +0x200", "차시까지 (비우면 끝까지)")
     UiBody(gui3)
-    gui3.Add("Button", "x+8 yp-1 w92 h30", "목록 읽기").OnEvent("Click", (*) => ScanSessions(true))
+    gui3.Add("Button", "x+8 yp-1 w92 h30", "목록 읽기").OnEvent("Click", (*) => ScanSessions(true, true))
     rightLast := gui3.Add("Edit", "x" R " y+10 w" colW " r6 ReadOnly -E0x200 Background" UiColor("카드"),
         "차시 목록을 아직 읽지 않았습니다.  [목록 읽기] 를 누르면 전체 차시와 들은 차시를 읽어 옵니다.")
     txtSessionInfo := rightLast
@@ -599,7 +604,7 @@ SyncAutoSession(from)
 
     ; 진행 중에 켰으면 다 들은 차시를 알 수 있게 목록을 한 번 읽어 둔다
     if (v && running && P("차시", "차시링크") != "")
-        ScanSessions()
+        ScanSessions(false, true)
 
     Tick()
 }
@@ -818,7 +823,7 @@ OpenProfileDir()
 LoadSettings()
 {
     global settingFile, profName, settingsLoaded, tgToken, tgChat, ovlMode, hkStart, hkAside, hkDump
-    global chkNext, chkPlay, chkQuizBeep, chkEndClose, chkTelegram, chkAwake, chkNoFront, chkOnTop
+    global chkNext, chkPlay, chkQuizBeep, chkEndClose, chkTelegram, chkAwake, chkNoFront, chkOnTop, chkDonePopup
     global editToken, editChat, editAsidePx, ddAsideSide, rdOvlBig, rdOvlSmall, rdOvlHidden, chkQuizAuto, editQuizWait, chkQuizForce, chkNextSession
     global editTickSec, editLastSession, chkAutoSession
     global asideSideSet
@@ -840,6 +845,7 @@ LoadSettings()
             chkNextSession.Value := IniRead(settingFile, "기본", "차시자동", 0)
             quizWait := IniRead(settingFile, "기본", "퀴즈대기초", 3)
             chkTelegram.Value := IniRead(settingFile, "기본", "텔레그램알림", 1)
+            chkDonePopup.Value := IniRead(settingFile, "기본", "완료알림창", 1)
             chkAwake.Value := IniRead(settingFile, "기본", "잠들지않기", 1)
             chkNoFront.Value := IniRead(settingFile, "기본", "창앞으로안가져오기", 1)
             chkOnTop.Value := IniRead(settingFile, "기본", "강의창항상위", 1)
@@ -891,7 +897,7 @@ LoadSettings()
 SaveSettings()
 {
     global settingFile, profName, settingsLoaded, tgToken, tgChat, ovlMode, hkStart, hkAside, hkDump
-    global chkNext, chkPlay, chkQuizBeep, chkEndClose, chkTelegram, chkAwake, chkNoFront, chkOnTop
+    global chkNext, chkPlay, chkQuizBeep, chkEndClose, chkTelegram, chkAwake, chkNoFront, chkOnTop, chkDonePopup
     global editToken, editChat, chkQuizAuto, chkQuizForce, chkNextSession
 
     if !settingsLoaded
@@ -913,6 +919,7 @@ SaveSettings()
         IniWrite(chkNextSession.Value, settingFile, "기본", "차시자동")
         IniWrite(QuizWaitSec(), settingFile, "기본", "퀴즈대기초")
         IniWrite(chkTelegram.Value, settingFile, "기본", "텔레그램알림")
+        IniWrite(chkDonePopup.Value, settingFile, "기본", "완료알림창")
         IniWrite(chkAwake.Value, settingFile, "기본", "잠들지않기")
         IniWrite(chkNoFront.Value, settingFile, "기본", "창앞으로안가져오기")
         IniWrite(chkOnTop.Value, settingFile, "기본", "강의창항상위")
@@ -1696,7 +1703,7 @@ PickListWindow()
     }
 
     ; 이 창에서 줄을 하나도 못 읽으면 빈 목록이 돌아온다 (전에 읽어 둔 표는 그대로 둔다)
-    if !ScanSessions(true).Length {
+    if !ScanSessions(true, true).Length {
         where := P("차시", "목록창", "학습창")
         SetState("고르신 창에서는 차시 표를 찾지 못했습니다."
             . "`n이 사이트의 차시 표는 '" (where = "" ? "학습창" : where) "' 창에 있습니다."
@@ -1886,10 +1893,13 @@ Start()
         return
     }
 
+    global courseDone
+
     running := true
     pressCount := 0
     holdUntil := 0
     doneNotified := false
+    courseDone := false
     lastTimeVal := -1
     lastPageVal := -1
     lastReadTick := 0
@@ -1899,7 +1909,7 @@ Start()
 
     ; 다음 차시로 넘어가기를 켰으면, 전체 차시가 몇 개인지 한 번 읽어 둔다
     if (chkNextSession.Value && P("차시", "차시링크") != "")
-        ScanSessions()
+        ScanSessions(false, true)
 
     Tick()
 }
@@ -2306,6 +2316,16 @@ UpdateOverlay(st := "", note := "")
         "프로필 없음", "프로필 없음"
     )
 
+    ; 다 들었으면 다시 시작할 때까지 초록 '완료' 로 둔다 (학습창을 닫아 화면을 못 읽어도)
+    global courseDone, doneMsg, sessionTotal
+
+    if (courseDone && !running) {
+        GuessTime("")
+        SetOverlay(sessionTotal > 0 ? sessionTotal "/" sessionTotal "차시" : "완료", "", "", "🎓", "", "완료"
+            , "학습을 모두 마쳤습니다", doneMsg)
+        return
+    }
+
     if !IsObject(st) {
         GuessTime("")
         SetOverlay("-/-", "--:--/--:--", "", "⚠", shortWord.Has(note) ? shortWord[note] : note, running ? "주의" : "정지")
@@ -2362,6 +2382,77 @@ UpdateOverlay(st := "", note := "")
     GuessTime((video = "▶" && st.timeTotal > 0 && st.timeCur >= 0) ? st : "")
     SetOverlay(page, time, video, emo, word, look
         , st.HasOwnProp("title1") ? st.title1 : "", st.HasOwnProp("title2") ? st.title2 : "")
+}
+
+; --------------------------------------------------
+; 다 들었을 때
+;   오버레이를 한 번에 초록 '완료' 카드로 바꾸고, 두 번 은은하게 밝아졌다 돌아온다 (약 3.6초)
+;   창 투명도만 바꾸므로 다시 칠하지 않아 부드럽다.
+;   설정에서 켰으면 알림 창도 띄운다.
+; --------------------------------------------------
+CelebrateDone(msg)
+{
+    global courseDone, doneMsg, chkDonePopup, ovl, pulseStep
+
+    courseDone := true
+    doneMsg := msg
+    UpdateOverlay()
+
+    if IsObject(ovl) {
+        pulseStep := 0
+        SetTimer(DonePulse, 40)
+    }
+
+    if (IsObject(chkDonePopup) && chkDonePopup.Value)
+        SetTimer(() => ShowDonePopup(msg), -300)
+}
+
+DonePulse()
+{
+    global ovl, pulseStep
+
+    static frames := 90                          ; 40ms × 90 ≈ 3.6초
+
+    pulseStep += 1
+
+    if (!IsObject(ovl) || pulseStep >= frames) {
+        SetTimer(DonePulse, 0)
+
+        if IsObject(ovl)
+            try WinSetTransparent(200, "ahk_id " ovl.Hwnd)
+
+        return
+    }
+
+    ; 200 → 255 → 200 → 255 → 200
+    a := 200 + Round(55 * (0.5 - 0.5 * Cos(pulseStep / frames * 4 * 3.14159265)))
+    try WinSetTransparent(a, "ahk_id " ovl.Hwnd)
+}
+
+; 다 들었다는 알림 창 (설정 → 알림 → 다 들으면 알림 창을 띄운다)
+ShowDonePopup(msg)
+{
+    static g := 0
+
+    try g.Destroy()
+
+    g := Gui("+AlwaysOnTop -MinimizeBox", "학습 완료")
+    g.BackColor := UiColor("바탕")
+    g.MarginX := 30
+    g.MarginY := 22
+
+    g.SetFont("s30", "Segoe UI Emoji")
+    g.Add("Text", "xm w380 Center", "🎓")
+    g.SetFont("s15 bold c" UiColor("글자"), "맑은 고딕")
+    g.Add("Text", "xm y+4 w380 Center", "학습을 모두 마쳤습니다")
+    UiNote(g, "xm y+8 w380 Center", msg)
+    UiNote(g, "xm y+4 w380 Center", "진도율이 늦게 오르는 사이트는 강의실에서 한 번 확인해 주세요.")
+    g.SetFont("s10 norm c" UiColor("글자"), "맑은 고딕")
+    ok := g.Add("Button", "xm+130 y+20 w120 h38 Default", "확인")
+    ok.OnEvent("Click", (*) => g.Destroy())
+    g.OnEvent("Close", (*) => g.Destroy())
+    g.OnEvent("Escape", (*) => g.Destroy())
+    g.Show("AutoSize")
 }
 
 ; 두 칸을 윗줄 오른쪽 끝에 나란히 붙인다 (a 다음 b)
@@ -3910,7 +4001,9 @@ SessionListHwnd()
     return h ? h : FindLectureWindow(where, true)
 }
 
-ScanSessions(report := false)
+;   restoreMin : 목록 창이 최소화돼 있으면 잠깐 펼쳐 읽고 다시 내린다
+;                (시작할 때·[목록 읽기]·차시를 넘길 때만. 1분마다 다시 찾을 때는 펼치지 않는다)
+ScanSessions(report := false, restoreMin := false)
 {
     global sessionInfo, sessionTotal
 
@@ -3948,6 +4041,9 @@ ScanSessions(report := false)
         return []
     }
 
+    ; 최소화된 브라우저 창은 내용을 비워 두기도 한다 (한국보건복지인재원: 링크 0개로 읽힘)
+    unmin := restoreMin ? TempRestore(hwnd) : ""
+
     root := 0
     try ComCall(6, UIA(), "ptr", hwnd, "ptr*", &root)
 
@@ -3981,6 +4077,30 @@ ScanSessions(report := false)
 
     ; 이번에 한 줄도 못 읽었으면 빈 목록 (전에 읽어 둔 표는 sessionInfo 에 그대로 있다)
     return found ? sessionInfo : []
+}
+
+; 최소화된 창을 잠깐 펼쳐 두는 것. 이 값이 없어질 때(함수가 끝날 때) 다시 내린다.
+;   앞으로 가져오지 않고 펼친다 (지금 쓰는 창의 포커스를 빼앗지 않는다)
+class TempRestore
+{
+    __New(hwnd)
+    {
+        this.hwnd := 0
+
+        try {
+            if (WinGetMinMax("ahk_id " hwnd) = -1) {
+                DllCall("ShowWindow", "ptr", hwnd, "int", 4)          ; SW_SHOWNOACTIVATE
+                this.hwnd := hwnd
+                Sleep 1500                                            ; 페이지를 다시 그릴 시간
+            }
+        }
+    }
+
+    __Delete()
+    {
+        if (this.hwnd && WinExist("ahk_id " this.hwnd))
+            try DllCall("ShowWindow", "ptr", this.hwnd, "int", 7)     ; SW_SHOWMINNOACTIVE
+    }
 }
 
 ; 읽은 줄들을 {번호, 이름, 학습시간, 들었는지} 로 남겨 둔다
@@ -4126,6 +4246,9 @@ GoNextSession(st, usePin := true)
     if !listHwnd
         return false
 
+    ; 목록 창이 최소화돼 있으면 잠깐 펼친다 (이 함수가 끝나면 다시 내린다)
+    unmin := TempRestore(listHwnd)
+
     ; 앞서 뜬 '사이트에서 나가시겠습니까?' 가 남아 있으면 페이지가 멈춰 있으므로 먼저 정리
     ConfirmLeaveDialog(listHwnd)
 
@@ -4218,6 +4341,7 @@ GoNextSession(st, usePin := true)
         ObjRelease(root)
         Notify("모든 차시를 마쳤습니다. 더 들을 차시가 없습니다.")
         Stop("모든 차시를 마쳤습니다.")
+        CelebrateDone("모든 차시를 마쳤습니다." (sessionTotal > 0 ? "  (전체 " sessionTotal "차시)" : ""))
 
         return true
     }
@@ -4232,6 +4356,7 @@ GoNextSession(st, usePin := true)
         ObjRelease(root)
         Notify("정해 두신 " limit "차시까지 다 들었습니다.")
         Stop(limit "차시까지 다 들었습니다. (설정 → 차시 → 어디까지)")
+        CelebrateDone("정해 두신 " limit "차시까지 다 들었습니다.")
 
         return true
     }
@@ -4294,6 +4419,54 @@ GoNextSession(st, usePin := true)
     SetState(num "차시를 눌렀습니다." skipNote " 새 강의가 뜨기를 기다립니다.")
 
     return true
+}
+
+; 브라우저 알림창 닫기 (단추가 [확인] 하나뿐인 것만)
+;   예) '학습이 종료되어야 다음 페이지로의 이동이 가능합니다.'
+;   [확인]·[취소] 가 같이 있는 창은 무언가를 정하는 창일 수 있어 누르지 않고 한 번 알린다.
+;   누르면 true
+DismissInfoAlert(hwnd)
+{
+    static cond := 0
+
+    if !hwnd
+        return false
+
+    if !cond
+        cond := U_CondInt(30003, 50000)          ; 버튼
+
+    root := 0
+    try ComCall(6, UIA(), "ptr", hwnd, "ptr*", &root)
+
+    if !root
+        return false
+
+    btns := []
+
+    for el in U_FindAll(root, cond) {
+        ; 브라우저가 띄운 대화상자의 단추만 (웹페이지 안의 '확인' 이 아니라)
+        if InStr(U_Str(el, 30), "MdTextButton")
+            btns.Push(el)
+        else
+            ObjRelease(el)
+    }
+
+    ObjRelease(root)
+    pressed := false
+
+    if (btns.Length = 1 && RegExMatch(Trim(U_Str(btns[1], 23)), "i)^(확인|OK)$")) {
+        pressed := (PressElement(btns[1]) != "")
+
+        if pressed
+            SetState("브라우저 알림창을 닫았습니다. ([확인])")
+    } else if (btns.Length > 1) {
+        NoticeOnce("브라우저 확인창", "누를지 정해야 하는 브라우저 창이 떠 있어 누르지 않았습니다. 직접 확인해 주세요")
+    }
+
+    for el in btns
+        ObjRelease(el)
+
+    return pressed
 }
 
 ; 브라우저의 '사이트에서 나가시겠습니까?' 같은 확인 창에서 '나가기' 를 누른다.
@@ -4850,6 +5023,13 @@ Act(root, st)
     global chkNext, chkPlay, chkQuizBeep, chkEndClose, chkQuizAuto, quizGoneTick, staticPage, staticSince
     global chkNextSession, videoWrapped
 
+    ; 00) 브라우저 알림창 ('학습이 종료되어야 다음 페이지로의 이동이 가능합니다.' 등)
+    ;     떠 있으면 웹페이지가 멈춰 영상도 안 흐른다. 시간이 멈춰 있을 때만 찾아본다 (가볍게)
+    if (StalledSec() >= 3 && DismissInfoAlert(GetLectureWindow())) {
+        holdUntil := A_TickCount + 2000
+        return
+    }
+
     ; 0) 사이트가 띄운 안내창 ('다음 동영상 페이지를 학습하시겠습니까?' 등)
     if HandleNotice(root, st) {
         pressCount += 1
@@ -4943,8 +5123,15 @@ Act(root, st)
     ; 3) 마지막 페이지까지 다 봤으면
     if (ended && last) {
         ; 설정에서 켰으면 다음 차시로 넘어간다
-        if (chkNextSession.Value && P("차시", "차시링크") != "" && GoNextSession(st))
+        autoNext := chkNextSession.Value && P("차시", "차시링크") != ""
+
+        if (autoNext && GoNextSession(st))
             return
+
+        ; 차시를 넘기지 않는 경우(이 강의만 듣는 경우)에는 여기서 다 들은 것.
+        ; (차시를 넘기다 실패한 경우는 다 들은 것이 아니므로 축하하지 않는다)
+        if (!autoNext && !doneNotified)
+            CelebrateDone("강의를 모두 마쳤습니다." (st.pageTotal > 0 ? "  (" st.pageCur " / " st.pageTotal " 페이지)" : ""))
 
         if !doneNotified {
             doneNotified := true
