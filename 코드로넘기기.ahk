@@ -3960,7 +3960,10 @@ GoNextSession(st, usePin := true)
         listHwnd := FindLectureWindow(listWhere)
 
         if !listHwnd {
-            Notify("다음 차시로 가려 했지만 목록 창을 찾지 못했습니다. ('" listWhere "' 이 들어간 창)")
+            ; 브라우저는 창마다 맨 앞 탭만 읽힌다. 목록 페이지가 뒤쪽 탭에 있거나 그 창에서 다른 사이트를 열면 못 찾는다
+            Notify("다음 차시로 가려 했지만 차시 목록 창('" listWhere "')을 찾지 못했습니다."
+                . "`n그 페이지를 닫았거나, 그 창에서 다른 탭·다른 사이트를 보고 있으면 찾지 못합니다."
+                . "`n'" listWhere "' 페이지를 창 하나에 따로, 맨 앞 탭으로 열어 두세요.")
             return false
         }
 
