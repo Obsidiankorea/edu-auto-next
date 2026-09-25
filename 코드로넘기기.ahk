@@ -25,7 +25,7 @@
 SetWorkingDir A_ScriptDir
 SetTitleMatchMode 2
 
-global appVersion   := "1.6.2"      ; 바꾸면 CHANGELOG.md 에도 적는다
+global appVersion   := "1.6.3"      ; 바꾸면 CHANGELOG.md 에도 적는다
 global releaseRepo  := "Obsidiankorea/edu-auto-next"   ; 새 버전을 받는 GitHub 저장소 (Releases)
 global profileDir   := A_ScriptDir "\사이트"
 global settingFile  := A_ScriptDir "\코드로넘기기.ini"
@@ -60,6 +60,8 @@ global asideHwnd    := 0
 
 global ovl          := 0           ; 작업 중 오버레이
 global ovlPage, ovlTime, ovlPlay, ovlEmo, ovlWord
+global ovlTitle1     := 0           ; 크게 오버레이: 강의 이름 줄
+global settingsShown := false       ; 설정 창을 지금 열어 두었는지 (단축키 칸이 채워져 있는지)
 global ovlLook      := ""          ; 지금 오버레이 겉모양 (보통 / 정지 / 주의 / 완료)
 
 global gui1, ddSite, ddWindow, txtWindow, txtState, txtCount, btnStart, btnAside
@@ -433,9 +435,12 @@ ShowSettings()
 {
     global gui3, hkStart, hkAside, hkDump, hkCtlStart, hkCtlAside, hkCtlDump
 
+    global settingsShown
+
     hkCtlStart.Value := hkStart
     hkCtlAside.Value := hkAside
     hkCtlDump.Value := hkDump
+    settingsShown := true
 
     ; 단축키 칸에서 키를 눌러 정할 수 있도록, 설정 창이 열려 있는 동안 단축키를 끈다
     Suspend(true)
@@ -444,7 +449,15 @@ ShowSettings()
 
 CloseSettings()
 {
-    global gui3, hkStart, hkAside, hkDump, hkCtlStart, hkCtlAside, hkCtlDump
+    global gui3, hkStart, hkAside, hkDump, hkCtlStart, hkCtlAside, hkCtlDump, settingsShown
+
+    ; 연 적이 없는 설정 창이 닫혔으면 (밖에서 보낸 닫기 신호 등) 단축키 칸이 비어 있다.
+    ; 그 빈 칸을 저장하면 단축키가 모두 지워지므로 아무것도 바꾸지 않는다.
+    ; (v1.6.2 까지: 프로그램을 밖에서 끌 때 숨은 설정 창까지 닫혀 F9·F11 이 사라진 일이 있었다)
+    if !settingsShown {
+        try gui3.Hide()
+        return
+    }
 
     s := Trim(hkCtlStart.Value)
     a := Trim(hkCtlAside.Value)
@@ -472,6 +485,7 @@ CloseSettings()
     }
 
     SaveSettings()
+    settingsShown := false
     gui3.Hide()
 }
 
@@ -2033,6 +2047,18 @@ TickBody()
 
     st := ReadState(root)
 
+    ; 차시 표를 아직 못 읽었으면 1분에 한 번 다시 읽어 본다
+    ;   (켤 때 목록 창이 없었다가 나중에 열어도 차시 번호·전체 차시를 알게)
+    global chkNextSession, sessionTotal
+
+    static lastScan := 0
+
+    if (running && IsObject(chkNextSession) && chkNextSession.Value && !sessionTotal
+        && P("차시", "차시링크") != "" && A_TickCount - lastScan > 60000) {
+        lastScan := A_TickCount
+        ScanSessions()
+    }
+
     n := ReadSessionNum(root)
 
     if (n > 0)
@@ -2103,6 +2129,14 @@ TickBody()
     if (running && A_TickCount >= holdUntil)
         Act(root, st)
 
+    ; 크게 오버레이에 보여 줄 강의 이름 (크게일 때만 읽는다)
+    global ovlTitle1
+
+    if IsObject(ovlTitle1) {
+        vt := VideoTitle(root)
+        st.title1 := vt[1], st.title2 := vt[2]
+    }
+
     ObjRelease(root)
     txtCount.Text := "넘김 " pressCount "회"
     UpdateOverlay(st)
@@ -2143,6 +2177,7 @@ OverlayFont()
 BuildOverlay()
 {
     global ovl, ovlPage, ovlTime, ovlPlay, ovlEmo, ovlWord, ovlIcon, ovlLook, ovlMode, settingFile
+    global ovlTitle1
 
     if IsObject(ovl) {
         try ovl.Destroy()
@@ -2150,7 +2185,7 @@ BuildOverlay()
     }
 
     ovlLook := ""
-    ovlIcon := 0, ovlTime := 0, ovlPlay := 0, ovlEmo := 0, ovlWord := 0
+    ovlIcon := 0, ovlTime := 0, ovlPlay := 0, ovlEmo := 0, ovlWord := 0, ovlTitle1 := 0
 
     if (ovlMode = "숨김")          ; 아예 띄우지 않는다
         return
@@ -2180,25 +2215,31 @@ BuildOverlay()
         ovl.SetFont("s10 bold", OverlayFont())
         ovlTime := ovl.Add("Text", Format("x{1} y{2} w{3} h{4} +0x200", Round(38 * k), Round(31 * k), ow - Round(42 * k), Round(22 * k)), "")
     } else {
-        ;       6/8
-        ;   ▶ 12:02/14:44
-        ;       📖
-        ow := Round(230 * k)
-        oh := Round(106 * k)
-        radius := Round(20 * k)
+        ;  📖 3/6차시 11/13p           ▶ 01:40/02:30
+        ;  사회복지시설 종사자 인권 현황(1)          ← 지금 차시 이름
+        ;  평가하기                                   ← 지금 페이지 이름 (알릴 말이 있으면 그것)
+        ; 글자는 작게, 대신 지금 듣는 강의가 무엇인지 보이게 한다
+        ow := Round(330 * k)
+        oh := Round(86 * k)
+        radius := Round(18 * k)
+        pad := Round(12 * k)
 
-        ovl.SetFont("s15 bold", OverlayFont())
-        ovlPage := ovl.Add("Text", Format("x0 y{1} w{2} h{3} Center +0x200", Round(6 * k), ow, Round(30 * k)), "-/-")
+        ovl.SetFont("s11 norm", "Segoe UI Symbol")
+        ovlEmo := ovl.Add("Text", Format("x{1} y{2} w{3} h{4} +0x200", pad - Round(2 * k), Round(6 * k), Round(24 * k), Round(26 * k)), "")
 
-        ovl.SetFont("s12 norm", "Segoe UI Symbol")
-        ovlPlay := ovl.Add("Text", Format("x0 y{1} w1 h{2} +0x200", Round(38 * k), Round(30 * k)), "")
-        ovl.SetFont("s16 bold", OverlayFont())
-        ovlTime := ovl.Add("Text", Format("x0 y{1} w1 h{2} +0x200", Round(38 * k), Round(30 * k)), "")
+        ovl.SetFont("s11 bold", OverlayFont())
+        ovlPage := ovl.Add("Text", Format("x{1} y{2} w{3} h{4} +0x200 +0x80", pad + Round(24 * k), Round(6 * k), Round(170 * k), Round(26 * k)), "-/-")
 
-        ovl.SetFont("s14 norm", "Segoe UI Symbol")
-        ovlEmo := ovl.Add("Text", Format("x0 y{1} w1 h{2} +0x200", Round(70 * k), Round(30 * k)), "")
+        ovl.SetFont("s10 norm", "Segoe UI Symbol")
+        ovlPlay := ovl.Add("Text", Format("x0 y{1} w1 h{2} +0x200", Round(6 * k), Round(26 * k)), "")
+        ovl.SetFont("s11 bold", OverlayFont())
+        ovlTime := ovl.Add("Text", Format("x0 y{1} w1 h{2} +0x200", Round(6 * k), Round(26 * k)), "")
+
+        ; 긴 이름은 끝을 '…' 로 줄인다 (0x4000).  & 를 밑줄 표시로 바꾸지 않는다 (0x80)
         ovl.SetFont("s10 bold", "맑은 고딕")
-        ovlWord := ovl.Add("Text", Format("x0 y{1} w1 h{2} +0x200", Round(70 * k), Round(30 * k)), "")
+        ovlTitle1 := ovl.Add("Text", Format("x{1} y{2} w{3} h{4} +0x200 +0x4000 +0x80", pad, Round(34 * k), ow - pad * 2, Round(24 * k)), "")
+        ovl.SetFont("s9 norm", "맑은 고딕")
+        ovlWord := ovl.Add("Text", Format("x{1} y{2} w{3} h{4} +0x200 +0x4000 +0x80", pad, Round(58 * k), ow - pad * 2, Round(22 * k)), "")
     }
 
     ovl.Show(Format("NA Hide w{1} h{2}", ow, oh))
@@ -2314,7 +2355,76 @@ UpdateOverlay(st := "", note := "")
         emo := "📖", word := "", look := "보통"
 
     GuessTime((video = "▶" && st.timeTotal > 0 && st.timeCur >= 0) ? st : "")
-    SetOverlay(page, time, video, emo, word, look)
+    SetOverlay(page, time, video, emo, word, look
+        , st.HasOwnProp("title1") ? st.title1 : "", st.HasOwnProp("title2") ? st.title2 : "")
+}
+
+; 두 칸을 윗줄 오른쪽 끝에 나란히 붙인다 (a 다음 b)
+LayoutRight(a, b, gapLogical, rightLogical)
+{
+    global ovl
+
+    k := A_ScreenDPI / 96
+    ovl.GetClientPos(, , &ow)
+    a.GetPos(, &y, , &h)
+
+    wa := (a.Text != "") ? MeasureText(a, a.Text) + 2 : 0
+    wb := (b.Text != "") ? MeasureText(b, b.Text) + 2 : 0
+    gap := (wa && wb) ? Round(gapLogical * k) : 0
+
+    xb := ow - Round(rightLogical * k) - wb
+    b.Move(xb, y, Max(wb, 1), h)
+    a.Move(xb - gap - wa, y, Max(wa, 1), h)
+}
+
+; 지금 듣는 강의 이름 → [차시 이름, 페이지 이름]  (크게 오버레이에 보여 준다)
+;   1) 프로필 [읽을것] 영상제목   창제목:정규식  또는 다른 읽기 규칙
+;   2) 프로필 [읽을것] 차시 가 '제목:…' 이면 그 글
+;   3) 차시 표에서 지금 차시의 이름
+;   4) 강의 창 제목 (브라우저 이름은 뺀다)
+;   ' > ' 가 있으면 앞은 차시, 뒤는 페이지로 나눈다  예) '사회복지시설 종사자 인권 현황(1) > 평가하기'
+VideoTitle(root)
+{
+    global sessionNum, sessionInfo
+
+    title := ""
+
+    try title := WinGetTitle("ahk_id " GetLectureWindow())
+
+    title := RegExReplace(title, "\s+-\s+(Brave|Chrome|Google Chrome|Microsoft.?\s?Edge|Whale|Naver Whale|Firefox|Mozilla Firefox|Opera)$", "")
+
+    t := ""
+    rule := Trim(P("읽을것", "영상제목"))
+
+    if (rule = "") {
+        r2 := Trim(P("읽을것", "차시"))
+
+        if (SubStr(r2, 1, 3) = "제목:")
+            rule := Trim(SubStr(r2, 4))
+
+        if (rule = "창제목")
+            rule := ""          ; 창 제목 그대로는 4) 에서
+    }
+
+    if (rule != "") {
+        if (SubStr(rule, 1, 4) = "창제목:")
+            t := RegExMatch(title, Trim(SubStr(rule, 5)), &m) ? (m.Count ? m[1] : m[0]) : ""
+        else
+            try t := ReadRule(root, rule)
+    }
+
+    if (t = "" && sessionNum > 0)
+        for it in sessionInfo
+            if (it.num = sessionNum)
+                t := it.name
+
+    if (t = "" && title != "" && title != P("사이트", "창제목"))
+        t := title
+
+    t := Trim(RegExReplace(t, "\s+", " "))
+    parts := StrSplit(t, " > ", , 2)
+
+    return [Trim(parts.Length ? parts[1] : ""), parts.Length > 1 ? Trim(parts[2]) : ""]
 }
 
 ; 화면을 5초·10초에 한 번만 읽으므로, 그사이 오버레이 시계가 멈춘 것처럼 보인다.
@@ -2351,9 +2461,9 @@ OverlayGuess()
         ovlTime.Text := t
 }
 
-SetOverlay(page, time, video, emo, word, look)
+SetOverlay(page, time, video, emo, word, look, title1 := "", title2 := "")
 {
-    global ovl, ovlPage, ovlTime, ovlPlay, ovlEmo, ovlWord, ovlIcon, ovlLook
+    global ovl, ovlPage, ovlTime, ovlPlay, ovlEmo, ovlWord, ovlIcon, ovlLook, ovlTitle1
 
     static last := Map()
 
@@ -2363,17 +2473,21 @@ SetOverlay(page, time, video, emo, word, look)
     if lookChanged {
         ovl.BackColor := c.bg
 
-        for ctrl in [ovlPage, ovlTime, ovlPlay, ovlEmo, ovlWord, ovlIcon]
+        for ctrl in [ovlPage, ovlTime, ovlPlay, ovlEmo, ovlWord, ovlIcon, ovlTitle1]
             if IsObject(ctrl)
                 ctrl.Opt("+Background" c.bg)
+
+        if IsObject(ovlTitle1)
+            ovlTitle1.SetFont("c" c.text)
 
         ovlPage.SetFont("c" c.text)
 
         if IsObject(ovlTime)
             ovlTime.SetFont("c" c.text)
 
+        ; 크게의 셋째 줄(페이지 이름)은 한 단계 흐리게. 빨강·초록 바탕에서는 흰색
         if IsObject(ovlWord)
-            ovlWord.SetFont("c" c.text)
+            ovlWord.SetFont("c" ((IsObject(ovlTitle1) && (look = "보통" || look = "정지")) ? "AAB4BE" : c.text))
 
         if IsObject(ovlEmo)
             ovlEmo.SetFont("c" c.emo)
@@ -2416,15 +2530,25 @@ SetOverlay(page, time, video, emo, word, look)
             ovlPlay.Text := video
             ovlTime.Text := time
             last["play"] := video, last["playColor"] := playColor
-            LayoutPair(ovlPlay, ovlTime, 6)
+            LayoutRight(ovlPlay, ovlTime, 4, 12)          ; 윗줄 오른쪽 끝에
         }
 
-        if (last.Get("emo", "?") != emo || ovlWord.Text != word) {
+        if (last.Get("emo", "?") != emo) {
             ovlEmo.Text := emo
-            ovlWord.Text := word
             last["emo"] := emo
-            LayoutPair(ovlEmo, ovlWord, 6)
         }
+
+        ; 둘째 줄: 차시 이름,  셋째 줄: 알릴 말이 있으면 그것, 없으면 페이지 이름
+        static longWord := Map("자동", "퀴즈 푸는 중", "퀴즈", "퀴즈가 나왔습니다", "못 읽음", "화면을 못 읽음", "가려짐", "창이 가려져 멈춤")
+
+        w3 := longWord.Has(word) ? longWord[word] : word
+        line3 := (w3 != "") ? w3 (title2 != "" ? "  ·  " title2 : "") : title2
+
+        if (ovlTitle1.Text != title1)
+            ovlTitle1.Text := title1
+
+        if (ovlWord.Text != line3)
+            ovlWord.Text := line3
     }
 
     if !DllCall("IsWindowVisible", "ptr", ovl.Hwnd)
@@ -2607,9 +2731,20 @@ AsideTargetX(x, w, px)
     return (side = "왼쪽") ? (vx - w + px) : (vx + vw - px)
 }
 
+; 숨기기(밀어두기) 켜기/끄기
+;   켜면: 강의 창을 화면 끝으로 밀어 두고, 끌 때까지 계속 밀어 둔다 (사이트가 창을 다시 꺼내도)
+;   끄면: 원래 자리로 되돌리고 더는 건드리지 않는다
 ToggleAside()
 {
     global asideSaved
+
+    static lastTick := 0
+
+    ; 한 번 누른 것이 두 번 들어가 켜졌다 바로 꺼지는 일이 없게 (키를 조금 길게 누르면 반복 입력된다)
+    if (A_TickCount - lastTick < 700)
+        return
+
+    lastTick := A_TickCount
 
     if IsObject(asideSaved)
         RestoreAside()
@@ -2619,7 +2754,7 @@ ToggleAside()
 
 PushAside()
 {
-    global asideSaved, asideHwnd, btnAside
+    global asideSaved, asideHwnd, btnAside, hkAside
 
     hwnd := GetLectureWindow()
 
@@ -2652,9 +2787,10 @@ PushAside()
     SetTimer(AsideGuard, 1000)
 
     RefreshHotkeyLabels()
-    SetState("강의 창을 화면 " (newX < x ? "왼쪽" : "오른쪽") " 끝에 " px "픽셀만 남기고 밀어 두었습니다."
+    SetState("숨기기 켬 — 강의 창을 화면 " (newX < x ? "왼쪽" : "오른쪽") " 끝에 " px "픽셀만 남기고 밀어 두었습니다."
+        . "`n끌 때까지 계속 밀어 둡니다. 사이트가 창을 다시 꺼내도 도로 밀어 둡니다."
         . "`n그 몇 픽셀이 가려지지 않도록 '항상 위' 로 해 두었습니다. 계속 진행됩니다."
-        . "`n되돌리려면 F11 을 다시 누르세요.")
+        . "`n끄려면 [창 되돌리기] 또는 단축키(" (hkAside != "" ? HotkeyText(hkAside) : "없음") ")를 다시 누르세요.")
 }
 
 ; 밀어 둔 창 지키기 (1초마다, 창 자리만 본다. 화면 내용은 읽지 않으므로 가볍다)
@@ -2725,7 +2861,7 @@ RestoreAside()
     asideSaved := ""
     asideHwnd := 0
     RefreshHotkeyLabels()
-    SetState("강의 창을 원래 자리로 되돌렸습니다.")
+    SetState("숨기기 끔 — 강의 창을 원래 자리로 되돌렸습니다. 이제 창을 건드리지 않습니다.")
 }
 
 ; --------------------------------------------------
@@ -3758,7 +3894,13 @@ SessionListHwnd()
 
     where := P("차시", "목록창", "학습창")
 
-    return (where = "" || where = "학습창") ? GetLectureWindow() : FindLectureWindow(where, true)
+    if (where = "" || where = "학습창")
+        return GetLectureWindow()
+
+    ; 같은 페이지가 창 여러 개에 열려 있을 수 있다. 보이는 창을 먼저, 없으면 최소화된 창
+    h := FindLectureWindow(where)
+
+    return h ? h : FindLectureWindow(where, true)
 }
 
 ScanSessions(report := false)
@@ -3958,6 +4100,10 @@ GoNextSession(st, usePin := true)
         listHwnd := GetLectureWindow()
     } else {
         listHwnd := FindLectureWindow(listWhere)
+
+        ; 최소화돼 있어도 표는 읽히고 누를 수 있다 (보이는 창을 먼저 쓴다)
+        if !listHwnd
+            listHwnd := FindLectureWindow(listWhere, true)
 
         if !listHwnd {
             ; 브라우저는 창마다 맨 앞 탭만 읽힌다. 목록 페이지가 뒤쪽 탭에 있거나 그 창에서 다른 사이트를 열면 못 찾는다
