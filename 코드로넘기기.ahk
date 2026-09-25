@@ -25,7 +25,7 @@
 SetWorkingDir A_ScriptDir
 SetTitleMatchMode 2
 
-global appVersion   := "1.6.1"      ; 바꾸면 CHANGELOG.md 에도 적는다
+global appVersion   := "1.6.2"      ; 바꾸면 CHANGELOG.md 에도 적는다
 global releaseRepo  := "Obsidiankorea/edu-auto-next"   ; 새 버전을 받는 GitHub 저장소 (Releases)
 global profileDir   := A_ScriptDir "\사이트"
 global settingFile  := A_ScriptDir "\코드로넘기기.ini"
@@ -2648,15 +2648,67 @@ PushAside()
     WinMove(newX, y, w, h, "ahk_id " hwnd)
     WinSetAlwaysOnTop(true, "ahk_id " hwnd)
 
+    ; 밀어 둔 동안 창이 다시 나오지 않게 지킨다 (사이트가 페이지마다 창 자리를 다시 잡는 경우)
+    SetTimer(AsideGuard, 1000)
+
     RefreshHotkeyLabels()
     SetState("강의 창을 화면 " (newX < x ? "왼쪽" : "오른쪽") " 끝에 " px "픽셀만 남기고 밀어 두었습니다."
         . "`n그 몇 픽셀이 가려지지 않도록 '항상 위' 로 해 두었습니다. 계속 진행됩니다."
         . "`n되돌리려면 F11 을 다시 누르세요.")
 }
 
+; 밀어 둔 창 지키기 (1초마다, 창 자리만 본다. 화면 내용은 읽지 않으므로 가볍다)
+;   사이트가 페이지를 넘길 때 팝업 창을 스스로 옮기거나 크기를 바꾸는 경우가 있다 (한국보건복지인재원).
+;   차시가 바뀌면 강의 창이 새로 열리기도 한다. 어느 쪽이든 다시 밀어 둔다.
+;   되돌리는 것은 F11. 마우스로 창을 끄는 중에는 건드리지 않는다.
+AsideGuard()
+{
+    global asideSaved, asideHwnd
+
+    if !IsObject(asideSaved) {
+        SetTimer(AsideGuard, 0)
+        return
+    }
+
+    hwnd := GetLectureWindow()
+
+    if (!hwnd || GetKeyState("LButton", "P"))
+        return
+
+    try {
+        if (WinGetMinMax("ahk_id " hwnd) = -1)
+            return                               ; 최소화된 창은 그대로 (사용자가 내린 것)
+
+        if (WinGetMinMax("ahk_id " hwnd) = 1)
+            WinRestore("ahk_id " hwnd)
+
+        WinGetPos(&x, &y, &w, &h, "ahk_id " hwnd)
+
+        if (w <= 0 || h <= 0)
+            return
+
+        ; 새로 열린 강의 창이면, 되돌릴 자리를 그 창의 지금 자리로
+        if (hwnd != asideHwnd) {
+            asideSaved := {x: x, y: y, w: w, h: h}
+            asideHwnd := hwnd
+        }
+
+        px := AsidePx()
+        want := AsideTargetX(asideSaved.x, w, px)
+
+        if (Abs(x - want) > 2)
+            WinMove(want, y, w, h, "ahk_id " hwnd)
+
+        if !(WinGetExStyle("ahk_id " hwnd) & 0x8)
+            WinSetAlwaysOnTop(true, "ahk_id " hwnd)
+    }
+}
+
 RestoreAside()
 {
     global asideSaved, asideHwnd, btnAside
+
+    SetTimer(AsideGuard, 0)
 
     if !IsObject(asideSaved)
         return
