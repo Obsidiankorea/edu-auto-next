@@ -4538,11 +4538,14 @@ RowsFromButtons(btns, texts, card)
                 if (Abs(tx.y - y) > 45 || (hasCell && !tx.cell))
                     continue
 
-                if RegExMatch(tx.text, "^\d{1,3}$") {
+                ; 번호 칸: '3' 또는 '3차시' (한국보건복지인재원은 창이 넓으면 가로 표가 되고 칸에 '3차시' 로 적힌다)
+                if RegExMatch(tx.text, "^(\d{1,3})\s*(차시)?$", &mn) {
                     if (num < 0 || tx.x < numX)
-                        num := Integer(tx.text), numX := tx.x
+                        num := Integer(mn[1]), numX := tx.x
                 } else if RegExMatch(tx.text, "^(\d{1,3})\s*%$", &mp) {
                     pct := Integer(mp[1])
+                } else if RegExMatch(tx.text, "^\d+\s*(시간|분|초)") {
+                    tspan := tx.text          ; 학습시간 칸 ('28분 10초', '0초') 은 이름이 아니다
                 } else if (tx.text != bname && !RegExMatch(tx.text, "^[\d\s.:/\-]+$") && StrLen(tx.text) > StrLen(name)) {
                     ; 날짜·시간·숫자만 있는 칸('2026.09.24 17:38:01', '-')은 이름이 아니다
                     name := tx.text
