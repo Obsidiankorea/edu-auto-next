@@ -62,7 +62,12 @@ $p = Start-Process $base -ArgumentList '/ErrorStdOut', '/validate', "`"$root\코
 if ($p.ExitCode -ne 0) { Fail "스크립트 검사 실패 (exit $($p.ExitCode))" }
 
 $exe = Join-Path $stage '코드로넘기기.exe'
-$p = Start-Process $ahk2exe -ArgumentList '/in', "`"$root\코드로넘기기.ahk`"", '/out', "`"$exe`"", '/base', "`"$base`"", '/silent' -Wait -PassThru
+$a2eArgs = @('/in', "`"$root\코드로넘기기.ahk`"", '/out', "`"$exe`"", '/base', "`"$base`"", '/silent')
+
+# 아이콘 (icon.ico 가 있으면 exe 아이콘으로 넣는다)
+if (Test-Path "$root\icon.ico") { $a2eArgs += @('/icon', "`"$root\icon.ico`"") }
+
+$p = Start-Process $ahk2exe -ArgumentList $a2eArgs -Wait -PassThru
 
 if ($p.ExitCode -ne 0 -or -not (Test-Path $exe)) { Fail "exe 빌드 실패 (exit $($p.ExitCode))" }
 

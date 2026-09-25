@@ -23,9 +23,13 @@
 ; ==================================================
 
 SetWorkingDir A_ScriptDir
+
+; 아이콘 (exe 는 빌드할 때 넣는다. .ahk 로 켤 때는 트레이·창 아이콘을 여기서 바꾼다)
+if (!A_IsCompiled && FileExist(A_ScriptDir "\icon.ico"))
+    TraySetIcon(A_ScriptDir "\icon.ico")
 SetTitleMatchMode 2
 
-global appVersion   := "1.6.3"      ; 바꾸면 CHANGELOG.md 에도 적는다
+global appVersion   := "1.6.4"      ; 바꾸면 CHANGELOG.md 에도 적는다
 global releaseRepo  := "Obsidiankorea/edu-auto-next"   ; 새 버전을 받는 GitHub 저장소 (Releases)
 global profileDir   := A_ScriptDir "\사이트"
 global settingFile  := A_ScriptDir "\코드로넘기기.ini"
@@ -2278,7 +2282,8 @@ OverlayLook(look)
         "보통", {bg: "1C2129", text: "E8EDF2", emo: "7EE2A8"},     ; 자동 넘기기 진행 중
         "정지", {bg: "1C2129", text: "9AA4AE", emo: "D9B98A"},     ; 쉬는 중 (자동 넘기기 꺼짐)
         "주의", {bg: "B3261E", text: "FFFFFF", emo: "FFFFFF"},     ; 사람이 봐야 함
-        "완료", {bg: "1B6B3A", text: "FFFFFF", emo: "FFFFFF"}      ; 강의 끝
+        "완료", {bg: "1B6B3A", text: "FFFFFF", emo: "FFFFFF"},     ; 강의 끝
+        "퀴즈", {bg: "F2C12E", text: "1C2129", emo: "1C2129"}      ; 문제풀이 중 (알아서 풀든 사람이 풀든)
     )
 
     return looks.Has(look) ? looks[look] : looks["보통"]
@@ -2338,9 +2343,9 @@ UpdateOverlay(st := "", note := "")
         video := "❚❚"
 
     if (st.quiz && running && chkQuizAuto.Value && (!quizStuck || forceActive))
-        emo := "📝", word := "자동", look := "보통"          ; 알아서 푸는 중
+        emo := "📝", word := "자동", look := "퀴즈"          ; 알아서 푸는 중
     else if st.quiz
-        emo := "📝", word := "퀴즈", look := "주의"
+        emo := "📝", word := "퀴즈", look := "퀴즈"
     else if (ended && last)
         emo := "🎓", word := "", look := "완료"
     else if !readable
@@ -2497,7 +2502,9 @@ SetOverlay(page, time, video, emo, word, look, title1 := "", title2 := "")
     }
 
     ; 재생 기호 색: 재생 초록 / 멈춤 주황 (빨강·초록 바탕 위에서는 흰색)
-    playColor := (look = "주의" || look = "완료") ? "FFFFFF" : (video = "▶" ? "3DDC84" : "FFC857")
+    playColor := (look = "주의" || look = "완료") ? "FFFFFF"
+        : (look = "퀴즈") ? "1C2129"          ; 노란 바탕에서는 어두운 색
+        : (video = "▶" ? "3DDC84" : "FFC857")
 
     if IsObject(ovlIcon) {
         ; ---- 작게: 기호 하나 + 페이지
@@ -2513,7 +2520,7 @@ SetOverlay(page, time, video, emo, word, look, title1 := "", title2 := "")
             last["icon"] := icon, last["iconColor"] := iconColor
         }
 
-        text := (word != "") ? word : page
+        text := (word = "자동") ? "자동 풀이" : (word != "") ? word : page
 
         if (ovlPage.Text != text)
             ovlPage.Text := text
