@@ -52,6 +52,12 @@ global chkDonePopup               ; 다 들으면 알림 창 (설정)
 global courseDone   := false      ; 다 들었음 (다시 시작할 때까지 오버레이를 초록 '완료' 로 둔다)
 global doneMsg      := ""         ; 다 들었을 때의 말
 global pulseStep    := 0          ; 다 들었을 때 오버레이가 은은하게 밝아졌다 돌아오는 장면 번호
+global chkAlertRed, chkAlertPopup ; 사람이 봐야 할 때: 오버레이 빨갛게(깜빡임) / 알림 창 (설정)
+global progressTick := 0          ; 마지막으로 진행(시간·페이지·차시·창 제목 바뀜)을 본 시각
+global progressSig  := ""
+global stuckOn      := false      ; 진행이 오래(2분) 멈춰 있음 (알아보지 못한 돌발 퀴즈·안내창 등)
+global attnKind     := ""         ; 지금 사람이 봐야 하는 까닭: quiz / stuck / ""
+global attnGui      := 0          ; 그때 띄운 알림 창
 
 global tgToken      := ""          ; 텔레그램 봇 토큰
 global tgChat       := ""          ; 텔레그램 채팅 ID
@@ -309,6 +315,7 @@ BuildSettingsGui()
 {
     global gui1, gui3
     global chkNext, chkPlay, chkQuizBeep, chkEndClose, chkTelegram, chkAwake, chkNoFront, chkOnTop, chkDonePopup
+    global chkAlertRed, chkAlertPopup
     global editToken, editChat, rdOvlBig, rdOvlSmall, rdOvlHidden, editAsidePx, ddTarget
     global hkCtlStart, hkCtlAside, hkCtlDump, chkQuizAuto, editQuizWait, chkQuizForce, ddAsideSide, chkNextSession
     global editTickSec, editLastSession, txtSessionInfo
@@ -349,6 +356,9 @@ BuildSettingsGui()
     chkQuizBeep := gui3.Add("CheckBox", "x" L " y+12 w" colW " Checked", "문제풀이가 뜨면 소리로 알린다")
     chkTelegram := gui3.Add("CheckBox", "x" L " y+9 w" colW " Checked", "문제풀이·완료·멈춤을 텔레그램으로 알린다")
     chkDonePopup := gui3.Add("CheckBox", "x" L " y+9 w" colW " Checked", "다 들으면 알림 창을 띄운다")
+    chkAlertRed := gui3.Add("CheckBox", "x" L " y+9 w" colW " Checked", "사람이 봐야 할 때 오버레이를 빨갛게 (진해졌다 연해졌다)")
+    chkAlertPopup := gui3.Add("CheckBox", "x" L " y+9 w" colW " Checked", "사람이 봐야 할 때 알림 창을 띄운다")
+    UiNote(gui3, "x" (L + 26) " y+3 w" (colW - 26), "직접 풀어야 할 퀴즈, 또는 2분 동안 진행이 멈췄을 때 (알아보지 못한 돌발 퀴즈·안내창 등)")
 
     UiLabel(gui3, "x" (L + 26) " y+12 w70 h28 +0x200", "봇 토큰")
     editToken := gui3.Add("Edit", "x+6 yp+1 w" (colW - 102) " Password", "")
@@ -824,6 +834,7 @@ LoadSettings()
 {
     global settingFile, profName, settingsLoaded, tgToken, tgChat, ovlMode, hkStart, hkAside, hkDump
     global chkNext, chkPlay, chkQuizBeep, chkEndClose, chkTelegram, chkAwake, chkNoFront, chkOnTop, chkDonePopup
+    global chkAlertRed, chkAlertPopup
     global editToken, editChat, editAsidePx, ddAsideSide, rdOvlBig, rdOvlSmall, rdOvlHidden, chkQuizAuto, editQuizWait, chkQuizForce, chkNextSession
     global editTickSec, editLastSession, chkAutoSession
     global asideSideSet
@@ -846,6 +857,8 @@ LoadSettings()
             quizWait := IniRead(settingFile, "기본", "퀴즈대기초", 3)
             chkTelegram.Value := IniRead(settingFile, "기본", "텔레그램알림", 1)
             chkDonePopup.Value := IniRead(settingFile, "기본", "완료알림창", 1)
+            chkAlertRed.Value := IniRead(settingFile, "기본", "주의빨강", 1)
+            chkAlertPopup.Value := IniRead(settingFile, "기본", "주의알림창", 1)
             chkAwake.Value := IniRead(settingFile, "기본", "잠들지않기", 1)
             chkNoFront.Value := IniRead(settingFile, "기본", "창앞으로안가져오기", 1)
             chkOnTop.Value := IniRead(settingFile, "기본", "강의창항상위", 1)
@@ -898,6 +911,7 @@ SaveSettings()
 {
     global settingFile, profName, settingsLoaded, tgToken, tgChat, ovlMode, hkStart, hkAside, hkDump
     global chkNext, chkPlay, chkQuizBeep, chkEndClose, chkTelegram, chkAwake, chkNoFront, chkOnTop, chkDonePopup
+    global chkAlertRed, chkAlertPopup
     global editToken, editChat, chkQuizAuto, chkQuizForce, chkNextSession
 
     if !settingsLoaded
@@ -920,6 +934,8 @@ SaveSettings()
         IniWrite(QuizWaitSec(), settingFile, "기본", "퀴즈대기초")
         IniWrite(chkTelegram.Value, settingFile, "기본", "텔레그램알림")
         IniWrite(chkDonePopup.Value, settingFile, "기본", "완료알림창")
+        IniWrite(chkAlertRed.Value, settingFile, "기본", "주의빨강")
+        IniWrite(chkAlertPopup.Value, settingFile, "기본", "주의알림창")
         IniWrite(chkAwake.Value, settingFile, "기본", "잠들지않기")
         IniWrite(chkNoFront.Value, settingFile, "기본", "창앞으로안가져오기")
         IniWrite(chkOnTop.Value, settingFile, "기본", "강의창항상위")
@@ -2136,6 +2152,23 @@ TickBody()
         && !(st.timeTotal > 0 && st.timeCur >= st.timeTotal - 1))
         awaitFresh := 0
 
+    ; 진행이 멈췄는지: 시간·페이지·차시·강의 창 제목이 2분 동안 그대로면
+    ;   (퀴즈로 알아보지 못한 돌발 문제, 브라우저·사이트 안내창, 가려져 멈춘 영상 등)
+    global progressTick, progressSig, stuckOn, courseDone
+
+    title := ""
+
+    try title := WinGetTitle("ahk_id " hwnd)
+
+    sig := st.timeCur "|" st.pageCur "|" sessionNum "|" title
+
+    if (sig != progressSig || !running || !progressTick) {
+        progressSig := sig
+        progressTick := A_TickCount
+    }
+
+    stuckOn := running && !courseDone && (A_TickCount - progressTick > 120000)
+
     SetState(StateText(st))
     WatchReadable(st)
     WatchCovered()
@@ -2154,6 +2187,7 @@ TickBody()
     ObjRelease(root)
     txtCount.Text := "넘김 " pressCount "회"
     UpdateOverlay(st)
+    WatchAttention(st)
 
     return st
 }
@@ -2362,16 +2396,23 @@ UpdateOverlay(st := "", note := "")
     else
         video := "❚❚"
 
+    ; 사람이 봐야 할 때: 설정에서 켰으면 빨강(진해졌다 연해졌다), 아니면 노랑
+    global chkAlertRed, stuckOn
+
+    attnLook := (IsObject(chkAlertRed) && chkAlertRed.Value) ? "주의" : "퀴즈"
+
     if (st.quiz && running && chkQuizAuto.Value && (!quizStuck || forceActive))
         emo := "📝", word := "자동", look := "퀴즈"          ; 알아서 푸는 중
     else if st.quiz
-        emo := "📝", word := "퀴즈", look := "퀴즈"
+        emo := "📝", word := "퀴즈", look := attnLook        ; 직접 풀어야 함
     else if (ended && last)
         emo := "🎓", word := "", look := "완료"
     else if !readable
         emo := "⚠", word := "못 읽음", look := running ? "주의" : "정지"
     else if !running
         emo := "☕", word := "", look := "정지"
+    else if stuckOn
+        emo := "⚠", word := "멈춤", look := attnLook         ; 진행이 2분째 그대로
     else if blindNotified
         emo := "⚠", word := "못 읽음", look := "주의"
     else if (covered && stalled >= 10)
@@ -2452,7 +2493,135 @@ ShowDonePopup(msg)
     ok.OnEvent("Click", (*) => g.Destroy())
     g.OnEvent("Close", (*) => g.Destroy())
     g.OnEvent("Escape", (*) => g.Destroy())
-    g.Show("AutoSize")
+    g.Show("AutoSize NA")          ; 앞으로 가져오지 않는다 (하던 작업의 포커스를 빼앗지 않게)
+}
+
+; --------------------------------------------------
+; 사람이 봐야 할 때 (직접 풀 퀴즈, 진행이 2분째 멈춤)
+;   오버레이: 빨강으로 진해졌다 연해졌다 (창 투명도만 바꿔 부드럽다) — 설정에서 끄면 노랑, 깜빡임 없음
+;   알림 창: 앞으로 가져오지 않고 띄운다. [강의 창 보기] 로 밀어 둔 창도 꺼낸다.
+;   다시 진행되면 알림 창을 닫고 깜빡임을 멈춘다.
+; --------------------------------------------------
+NeedsAttention(st)
+{
+    global running, courseDone, chkQuizAuto, quizStuck, forceActive, stuckOn
+
+    if (!running || courseDone || !IsObject(st))
+        return ""
+
+    if st.quiz
+        return (chkQuizAuto.Value && (!quizStuck || forceActive)) ? "" : "quiz"
+
+    return stuckOn ? "stuck" : ""
+}
+
+WatchAttention(st)
+{
+    global attnKind, chkAlertRed, chkAlertPopup, ovl
+
+    kind := NeedsAttention(st)
+
+    if (kind = attnKind)
+        return
+
+    attnKind := kind
+
+    if (kind = "") {
+        CloseAttentionPopup()
+        SetTimer(AttentionPulse, 0)
+
+        if IsObject(ovl)
+            try WinSetTransparent(200, "ahk_id " ovl.Hwnd)
+
+        return
+    }
+
+    if (IsObject(chkAlertRed) && chkAlertRed.Value)
+        SetTimer(AttentionPulse, 50)
+
+    if (IsObject(chkAlertPopup) && chkAlertPopup.Value)
+        ShowAttentionPopup(kind)
+
+    if (kind = "stuck")
+        Notify("진행이 2분째 멈춰 있습니다. 강의 화면을 확인해 주세요. (돌발 퀴즈·안내창일 수 있습니다)")
+}
+
+; 빨간 오버레이가 진해졌다 연해졌다 (1.6초에 한 번)
+AttentionPulse()
+{
+    global ovl, attnKind
+
+    if (!IsObject(ovl) || attnKind = "") {
+        SetTimer(AttentionPulse, 0)
+        return
+    }
+
+    ph := Mod(A_TickCount, 1600) / 1600
+    a := 140 + Round(115 * (0.5 + 0.5 * Sin(ph * 2 * 3.14159265)))
+    try WinSetTransparent(a, "ahk_id " ovl.Hwnd)
+}
+
+ShowAttentionPopup(kind)
+{
+    global attnGui
+
+    CloseAttentionPopup()
+
+    quiz := (kind = "quiz")
+    g := Gui("+AlwaysOnTop -MinimizeBox", "확인해 주세요")
+    g.BackColor := UiColor("바탕")
+    g.MarginX := 28
+    g.MarginY := 20
+
+    g.SetFont("s26", "Segoe UI Emoji")
+    g.Add("Text", "xm w380 Center", quiz ? "📝" : "⚠")
+    g.SetFont("s14 bold c" UiColor("글자"), "맑은 고딕")
+    g.Add("Text", "xm y+2 w380 Center", quiz ? "퀴즈를 직접 풀어 주세요" : "진행이 멈췄습니다")
+    UiNote(g, "xm y+8 w380 Center", quiz
+        ? "자동으로 풀 수 없는 퀴즈입니다. 풀고 나면 이어서 진행합니다."
+        : "2분 동안 시간·페이지가 그대로입니다.`n돌발 퀴즈나 안내창이 떠 있는지 확인해 주세요.")
+    g.SetFont("s10 norm c" UiColor("글자"), "맑은 고딕")
+    b1 := g.Add("Button", "xm+40 y+18 w150 h38 Default", "강의 창 보기")
+    b1.OnEvent("Click", (*) => ShowLectureForUser())
+    b2 := g.Add("Button", "x+10 yp w140 h38", "닫기")
+    b2.OnEvent("Click", (*) => CloseAttentionPopup())
+    g.OnEvent("Close", (*) => CloseAttentionPopup())
+    g.OnEvent("Escape", (*) => CloseAttentionPopup())
+
+    attnGui := g
+    g.Show("AutoSize NA")          ; 앞으로 가져오지 않는다
+}
+
+CloseAttentionPopup()
+{
+    global attnGui
+
+    if IsObject(attnGui)
+        try attnGui.Destroy()
+
+    attnGui := 0
+}
+
+; 강의 창을 사람이 보게: 밀어 두었으면 되돌리고, 최소화돼 있으면 펼쳐 앞으로
+ShowLectureForUser()
+{
+    global asideSaved
+
+    if IsObject(asideSaved)
+        RestoreAside()
+
+    hwnd := GetLectureWindow()
+
+    if hwnd {
+        try {
+            if (WinGetMinMax("ahk_id " hwnd) = -1)
+                WinRestore("ahk_id " hwnd)
+
+            WinActivate("ahk_id " hwnd)
+        }
+    }
+
+    CloseAttentionPopup()
 }
 
 ; 두 칸을 윗줄 오른쪽 끝에 나란히 붙인다 (a 다음 b)
@@ -2637,7 +2806,8 @@ SetOverlay(page, time, video, emo, word, look, title1 := "", title2 := "")
         }
 
         ; 둘째 줄: 차시 이름,  셋째 줄: 알릴 말이 있으면 그것, 없으면 페이지 이름
-        static longWord := Map("자동", "퀴즈 푸는 중", "퀴즈", "퀴즈가 나왔습니다", "못 읽음", "화면을 못 읽음", "가려짐", "창이 가려져 멈춤")
+        static longWord := Map("자동", "퀴즈 푸는 중", "퀴즈", "퀴즈가 나왔습니다 — 직접 풀어 주세요", "못 읽음", "화면을 못 읽음"
+            , "가려짐", "창이 가려져 멈춤", "멈춤", "진행이 멈췄습니다 — 확인해 주세요")
 
         w3 := longWord.Has(word) ? longWord[word] : word
         line3 := (w3 != "") ? w3 (title2 != "" ? "  ·  " title2 : "") : title2
