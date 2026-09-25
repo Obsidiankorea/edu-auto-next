@@ -93,18 +93,36 @@ $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
 [IO.File]::WriteAllText((Join-Path $dist 'SHA256SUMS.txt'), "$hash  $zipName`n", $utf8)
 
 # ---------- 6) 릴리스 설명 ----------
+#   설명은 짧게 둔다. v1.6.0 exe 는 릴리스 설명이 3,000 자쯤 넘으면 읽다가 실패해서 업데이트를 못 한다.
+#   (v1.6.1 에서 고쳤지만, v1.6.0 을 받은 PC 가 새 버전으로 넘어오려면 설명이 짧아야 한다)
+#   넘치면 앞부분만 두고 나머지는 CHANGELOG 로 넘긴다.
+$maxNotes = 1200
+
+if ($notes.Length -gt $maxNotes) {
+    $cut = $notes.Substring(0, $maxNotes)
+    $nl = $cut.LastIndexOf("`n")
+
+    if ($nl -gt 0) { $cut = $cut.Substring(0, $nl) }
+
+    $notes = $cut.TrimEnd() + "`n- ... 나머지는 CHANGELOG.md 를 보세요."
+}
+
 $body = @"
 $notes
 
 ---
-
-### 받기
-- ``$zipName`` 을 받아 원하는 폴더에 풀고 ``코드로넘기기.exe`` 를 실행하세요. 설치나 레지스트리 설정은 필요 없습니다.
-- v1.6.0 부터는 켤 때 새 버전이 있으면 알려 주고, [예] 를 누르면 알아서 바꿉니다. 개인 설정과 직접 고친 사이트 프로필은 그대로 둡니다.
-- v1.5.0 이하 exe 는 스스로 바꾸지 못하니, 이번 한 번은 직접 받아 주세요.
-- 서명하지 않은 exe 라 처음 실행할 때 Windows 경고가 뜰 수 있습니다. ([추가 정보] → [실행])
-- SHA256 (``$zipName``): ``$hash``
+- ``$zipName`` 을 받아 풀고 ``코드로넘기기.exe`` 를 실행하세요. 설치·레지스트리 없음.
+- v1.6.0 부터는 켤 때 새 버전을 알려 주고 스스로 바꿉니다. 개인 설정·직접 고친 프로필은 그대로 둡니다.
+- 전체 바뀐 내역: https://github.com/Obsidiankorea/edu-auto-next/blob/$tag/CHANGELOG.md
+- SHA256: ``$hash``
 "@
+
+# GitHub 가 돌려주는 JSON 에서의 길이 (줄바꿈이 \r\n 네 글자가 된다)
+$jsonLen = ($body | ConvertTo-Json -Compress).Length
+
+if ($jsonLen -gt 2500) { Fail "릴리스 설명이 너무 깁니다 ($jsonLen 자). CHANGELOG 칸을 줄여 주세요." }
+
+Write-Host "설명      $($body.Length) 자 (JSON $jsonLen 자)"
 
 [IO.File]::WriteAllText((Join-Path $dist 'notes.md'), $body, $utf8)
 

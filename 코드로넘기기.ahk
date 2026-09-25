@@ -25,7 +25,7 @@
 SetWorkingDir A_ScriptDir
 SetTitleMatchMode 2
 
-global appVersion   := "1.6.0"      ; 바꾸면 CHANGELOG.md 에도 적는다
+global appVersion   := "1.6.1"      ; 바꾸면 CHANGELOG.md 에도 적는다
 global releaseRepo  := "Obsidiankorea/edu-auto-next"   ; 새 버전을 받는 GitHub 저장소 (Releases)
 global profileDir   := A_ScriptDir "\사이트"
 global settingFile  := A_ScriptDir "\코드로넘기기.ini"
@@ -1399,12 +1399,30 @@ FileSha256(path)
 }
 
 ; JSON 에서 "key": "값" 하나 꺼내기 (릴리스 정보 읽기용의 간단한 것)
+;   값 전체를 정규식 하나로 잡으면, 값이 3,000 자쯤 넘을 때 정규식 한도(PCRE -21)에 걸려 오류가 난다.
+;   (v1.6.0: 릴리스 설명이 길어서 exe 판 업데이트 확인이 실패했다)
+;   그래서 값이 시작하는 곳만 정규식으로 찾고, 끝 따옴표는 한 글자씩 넘기며 찾는다.
 JsonStr(json, key)
 {
-    if !RegExMatch(json, '"' key '"\s*:\s*"((?:[^"\\]|\\.)*)"', &m)
+    if !RegExMatch(json, '"' key '"\s*:\s*"', &m)
         return ""
 
-    return JsonUnescape(m[1])
+    i := m.Pos + m.Len          ; 값의 첫 글자
+    j := i
+    n := StrLen(json)
+
+    while (j <= n) {
+        c := SubStr(json, j, 1)
+
+        if (c = "\")
+            j += 2              ; \" \\ \n \uXXXX 등: 다음 글자는 끝 따옴표가 아니다
+        else if (c = '"')
+            break
+        else
+            j += 1
+    }
+
+    return JsonUnescape(SubStr(json, i, j - i))
 }
 
 JsonUnescape(s)
