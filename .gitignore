@@ -9,3 +9,6 @@
 *.exe
 *.bak
 *.zip
+
+# 배포 스크립트(release.ps1)가 만드는 것
+dist/

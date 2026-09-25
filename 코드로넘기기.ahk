@@ -25,7 +25,8 @@
 SetWorkingDir A_ScriptDir
 SetTitleMatchMode 2
 
-global appVersion   := "1.5.0"      ; 바꾸면 CHANGELOG.md 에도 적는다
+global appVersion   := "1.6.0"      ; 바꾸면 CHANGELOG.md 에도 적는다
+global releaseRepo  := "Obsidiankorea/edu-auto-next"   ; 새 버전을 받는 GitHub 저장소 (Releases)
 global profileDir   := A_ScriptDir "\사이트"
 global settingFile  := A_ScriptDir "\코드로넘기기.ini"
 global dumpFile     := A_ScriptDir "\코드목록.txt"
@@ -132,10 +133,12 @@ LoadProfileNames()
 RefreshWindowList()
 BuildOverlay()
 OnMessage(0x201, OverlayMouseDown)          ; 오버레이를 누르거나 끌 때
+OnMessage(0x20, SiteUrlCursor)              ; 🌐 위에서는 손 모양 커서
 ApplyTickInterval()
 SetTimer(OverlayGuess, 1000)                ; 오버레이 시계만 혼자 흐르게 (화면은 안 읽음)
 Tick()
 SetTimer(() => CheckUpdate(true), -4000)   ; 켜고 조금 뒤 GitHub 에 새 버전이 있는지 조용히 확인
+CleanOldExe()                               ; 지난 업데이트에서 이름만 바꿔 둔 옛 exe 지우기
 OnExit((*) => CleanUpOnExit())
 OnError(LogError)                           ; 오류가 나면 코드로넘기기_기록.txt 에 남긴다
 
@@ -215,6 +218,7 @@ UiIconButton(g, opts, glyph, callback)
 BuildGui()
 {
     global gui1, ddSite, ddWindow, ddList, txtWindow, txtState, txtCount, btnStart, btnAside, txtHotkeys, chkAutoSession
+    global btnSiteUrl
 
     cw := 520
 
@@ -230,9 +234,21 @@ BuildGui()
 
     ; 사이트 / 강의 창
     UiLabel(gui1, "xm y+22 w78 h30 +0x200", "사이트")
-    ddSite := gui1.Add("DropDownList", "x+8 yp+1 w384", [])
+    ; 고른 사이트의 교육 페이지를 브라우저로 여는 아이콘 ([사이트] 주소)
+    ;   테두리 없이 그림 글자만 둔다. 누를 수 있다는 것은 손 모양 커서와 풍선 도움말로 알린다.
+    ;   +0x200 : 세로 가운데,  +0x100 : 누르면 알림(SS_NOTIFY)
+    gui1.SetFont("s13 norm c" UiColor("글자"), "Segoe UI Emoji")
+    btnSiteUrl := gui1.Add("Text", "x+4 yp+0 w40 h30 Center +0x200 +0x100", "🌐")
+    btnSiteUrl.OnEvent("Click", (*) => OpenSiteUrl())
+    UiBody(gui1)
+    ddSite := gui1.Add("DropDownList", "x+6 yp+1 w342", [])
     ddSite.OnEvent("Change", (*) => UseProfile(ddSite.Text))
     UiIconButton(gui1, "x+6 yp-1 w44 h30", "↻", (*) => LoadProfileNames())
+
+    ; 아이콘을 드롭다운과 똑같은 높이·위치에 맞춘다
+    ddSite.GetPos(, &sy, , &sh)
+    btnSiteUrl.GetPos(&bx)
+    btnSiteUrl.Move(bx, sy, , sh)
 
     UiLabel(gui1, "xm y+12 w78 h30 +0x200", "강의 창")
     ddWindow := gui1.Add("DropDownList", "x+8 yp+1 w384", [])
@@ -605,8 +621,58 @@ LoadProfileNames()
     ddSite.Add(profileList)
 
     pick := (profName != "" && HasValue(profileList, profName)) ? profName : AutoPickProfile()
+
+    ; 지난번에 쓰던 프로필이 지금 열려 있는 창에도 맞기는 하지만,
+    ; 그 창에 더 딱 맞는(창제목을 더 자세히 적어 둔) 프로필이 있으면 그쪽으로 바꾼다.
+    ;   예) 한국보건복지인재원 학습창은 제목에 '학습창' 도 들어 있어서
+    ;       지방자치인재개발원 프로필에도 맞아 버린다.
+    better := BetterProfileFor(pick)
+
+    if (better != "")
+        pick := better
+
     ddSite.Choose(pick)
     UseProfile(pick)
+
+    if (better != "")
+        SetState("열려 있는 창에 더 맞는 '" better "' 프로필로 바꿨습니다."
+            . "`n다른 사이트라면 위에서 직접 골라 주세요.")
+}
+
+; 지금 열려 있는 창에 더 딱 맞는 프로필 이름 (없으면 빈 글자)
+;   창제목을 더 자세히(길게) 적어 둔 쪽이 이긴다. 같은 창에 맞을 때만 바꾼다.
+BetterProfileFor(name)
+{
+    global profileList, profileDir
+
+    data := ReadProfileFile(profileDir "\" name ".ini")
+    key := GetVal(data, "사이트", "창제목")
+    hwnd := (key != "") ? FindLectureWindow(key) : 0
+
+    if !hwnd
+        return ""
+
+    title := ""
+
+    try title := WinGetTitle("ahk_id " hwnd)
+
+    if (title = "")
+        return ""
+
+    best := "", bestLen := StrLen(key)
+
+    for other in profileList {
+        if (other = name)
+            continue
+
+        d2 := ReadProfileFile(profileDir "\" other ".ini")
+        k2 := GetVal(d2, "사이트", "창제목")
+
+        if (k2 != "" && StrLen(k2) > bestLen && InStr(title, k2))
+            best := other, bestLen := StrLen(k2)
+    }
+
+    return best
 }
 
 HasValue(arr, v)
@@ -623,15 +689,20 @@ AutoPickProfile()
 {
     global profileList, profileDir
 
+    ; 창제목이 여러 프로필에 다 맞을 수 있다.
+    ;   '학습창' (지방자치인재개발원) 과 '한국보건복지인재원' 은 같은 창 제목에 둘 다 맞는다.
+    ;   그래서 더 자세한(긴) 창제목을 적어 둔 프로필이 이긴다.
+    best := "", bestLen := 0
+
     for name in profileList {
         data := ReadProfileFile(profileDir "\" name ".ini")
         key := GetVal(data, "사이트", "창제목")
 
-        if (key != "" && FindLectureWindow(key))
-            return name
+        if (key != "" && StrLen(key) > bestLen && FindLectureWindow(key))
+            best := name, bestLen := StrLen(key)
     }
 
-    return profileList[1]
+    return (best != "") ? best : profileList[1]
 }
 
 UseProfile(name)
@@ -963,6 +1034,414 @@ LogError(e, mode)
 ;   exe 로 만든 판은 git 저장소가 아니므로 쓸 수 없다.
 ;   설정(코드로넘기기.ini)은 저장소에 올리지 않으므로 받아도 그대로 남는다.
 ; --------------------------------------------------
+; ==================================================
+; 업데이트 - exe 판 (GitHub Releases)
+;
+;   exe 로 쓰는 사람 PC 에는 git 이 없으므로, 릴리스에 올린 zip 을 받아 스스로 바꾼다.
+;   1) api.github.com 에서 최신 릴리스를 본다 (태그 v1.6.0 ↔ appVersion)
+;   2) 새 버전이면 묻고, zip 과 SHA256SUMS.txt 를 받는다 (이 저장소의 릴리스 주소만)
+;   3) 받은 zip 의 SHA256 이 릴리스에 적힌 것과 같은지 본다
+;   4) 풀어서, 실행 중인 exe 는 이름만 .old 로 바꾸고 새 exe 를 넣는다
+;      (실행 중인 파일은 덮어쓸 수 없지만 이름은 바꿀 수 있다)
+;   5) 사이트 프로필: 새 것은 더하고, 손대지 않은 것은 바꾸고, 직접 고친 것은 두고 옆에 .new
+;   6) 새 exe 를 켜고 끝낸다. 다음에 켤 때 .old 를 지운다.
+;   레지스트리·설치 없음. 개인 설정(코드로넘기기.ini)은 건드리지 않는다.
+; ==================================================
+CheckReleaseUpdate(quiet, owner)
+{
+    global appVersion, running
+
+    say := (msg, opt := "0x40") => quiet ? "" : MsgBox(msg, "업데이트", opt " Owner" owner)
+
+    err := ""
+    rel := LatestRelease(&err)
+
+    if !IsObject(rel) {
+        say("새 버전을 확인하지 못했습니다. (인터넷이 막혔을 수 있습니다)`n`n" err, "0x30")
+        return
+    }
+
+    if (VerCompare(rel.version, appVersion) <= 0) {
+        say("최신 버전입니다.  (v" appVersion ")")
+        return
+    }
+
+    notes := SubStr(rel.notes, 1, 1500)
+
+    ; .ahk 를 파일만 복사해 쓰는 경우: 스스로 바꾸지 않고 받는 곳만 알려 준다
+    if !A_IsCompiled {
+        if (MsgBox("새 버전 v" rel.version " 이 있습니다.  (지금 v" appVersion ")`n`n" notes
+            . "`n`n받는 곳을 열까요?", "업데이트", "0x44 Owner" owner) = "Yes")
+            try Run(rel.page)
+
+        return
+    }
+
+    if (rel.zipUrl = "") {
+        say("새 버전 v" rel.version " 이 있지만 릴리스에 받을 파일이 없습니다.`n" rel.page, "0x30")
+        return
+    }
+
+    ask := MsgBox("새 버전이 있습니다.  (지금 v" appVersion "  →  v" rel.version ")`n`n" notes
+        . "`n`n지금 받아서 바꾼 뒤 다시 시작할까요?"
+        . "`n개인 설정은 그대로 두고, 직접 고치신 사이트 프로필도 덮어쓰지 않습니다."
+        . (running ? "`n(진행 중인 넘기기는 멈춥니다. 다시 켠 뒤 F9 로 이어서 하세요)" : ""),
+        "업데이트", "0x44 Owner" owner)
+
+    if (ask != "Yes")
+        return
+
+    ; 잘 되면 새 exe 를 켜고 여기서 끝나므로 돌아오지 않는다. 돌아오면 실패한 까닭
+    why := ApplyReleaseUpdate(rel)
+    MsgBox(why, "업데이트", "0x30 Owner" owner)
+}
+
+; 최신 릴리스 {version, notes, page, zipUrl, zipName, sumUrl}. 못 읽으면 "" (err 에 까닭)
+LatestRelease(&err)
+{
+    global releaseRepo
+
+    body := HttpFetch("https://api.github.com/repos/" releaseRepo "/releases/latest", &err)
+
+    if (body = "")
+        return ""
+
+    tag := JsonStr(body, "tag_name")
+
+    if !RegExMatch(tag, "^v?(\d+(?:\.\d+)*)$", &m) {
+        err := "릴리스 태그를 읽지 못했습니다: " tag
+        return ""
+    }
+
+    rel := {version: m[1], notes: JsonStr(body, "body"), page: JsonStr(body, "html_url")
+        , zipUrl: "", zipName: "", sumUrl: ""}
+
+    pos := 1
+
+    while (pos := RegExMatch(body, '"browser_download_url"\s*:\s*"([^"]+)"', &a, pos)) {
+        url := a[1]
+        name := RegExReplace(url, "^.*/", "")
+
+        if RegExMatch(name, "i)\.zip$")
+            rel.zipUrl := url, rel.zipName := name
+        else if RegExMatch(name, "i)^SHA256SUMS")
+            rel.sumUrl := url
+
+        pos += a.Len
+    }
+
+    return rel
+}
+
+; 받아서 바꾼다. 잘 되면 새 exe 를 켜고 끝난다. 실패하면 까닭을 돌려주고, 아무것도 바꾸지 않는다
+ApplyReleaseUpdate(rel)
+{
+    global releaseRepo, running
+
+    ; 이 저장소의 릴리스 파일만 받는다
+    okPrefix := "https://github.com/" releaseRepo "/releases/download/"
+
+    for u in [rel.zipUrl, rel.sumUrl]
+        if (u != "" && SubStr(u, 1, StrLen(okPrefix)) != okPrefix)
+            return "받을 주소가 이 프로그램의 GitHub 저장소가 아니라서 받지 않았습니다.`n" u
+
+    if (rel.sumUrl = "")
+        return "릴리스에 SHA256SUMS.txt 가 없어 받은 파일을 확인할 수 없습니다. 바꾸지 않았습니다."
+
+    work := A_Temp "\edu-auto-next-update"
+    try DirDelete(work, true)
+
+    try DirCreate(work)
+    catch as e
+        return "임시 폴더를 만들지 못했습니다.`n" e.Message
+
+    zip := work "\" rel.zipName
+    err := ""
+
+    if (HttpFetch(rel.zipUrl, &err, zip) = "")
+        return "새 버전을 받지 못했습니다.`n" err
+
+    ; 받은 파일이 릴리스에 적힌 것과 같은지 (덜 받았거나 중간에 바뀐 것을 거른다)
+    sums := HttpFetch(rel.sumUrl, &err)
+    want := ""
+
+    for line in StrSplit(sums, "`n", "`r")
+        if (RegExMatch(line, "i)^([0-9a-f]{64})\s+\*?(.+?)\s*$", &hm) && hm[2] = rel.zipName)
+            want := StrLower(hm[1])
+
+    if (want = "")
+        return "SHA256SUMS.txt 에서 " rel.zipName " 을 찾지 못했습니다. 바꾸지 않았습니다."
+
+    got := FileSha256(zip)
+
+    if (got != want)
+        return "받은 파일이 릴리스에 적힌 것과 다릅니다. 바꾸지 않았습니다.`n`n릴리스: " want "`n받은 것: " got
+
+    ; 풀기 (윈도우 10 부터 들어 있는 tar)
+    unz := work "\풀기"
+    code := -1
+
+    try {
+        DirCreate(unz)
+        code := RunWait('tar -xf "' zip '" -C "' unz '"', , "Hide")
+    }
+
+    newExe := unz "\코드로넘기기.exe"
+
+    if (code != 0 || !FileExist(newExe))
+        return "받은 파일을 풀지 못했습니다. 바꾸지 않았습니다."
+
+    if running
+        Stop("업데이트하려고 멈췄습니다.")
+
+    ; exe 바꾸기
+    me := A_ScriptFullPath
+    old := me ".old"
+    try FileDelete(old)
+
+    try {
+        FileMove(me, old)
+    } catch as e {
+        return "exe 를 바꾸지 못했습니다. 그대로 둡니다.`n" e.Message
+    }
+
+    try {
+        FileCopy(newExe, me)
+    } catch as e {
+        try FileMove(old, me, 1)          ; 되돌린다
+        return "exe 를 바꾸지 못했습니다. 그대로 둡니다.`n" e.Message
+    }
+
+    note := UpdateProfiles(unz)
+
+    ; 설명서는 새 것으로
+    for f in ["코드로넘기기_설명.txt", "README.md", "CHANGELOG.md"]
+        if FileExist(unz "\" f)
+            try FileCopy(unz "\" f, A_ScriptDir "\" f, 1)
+
+    try DirDelete(work, true)
+
+    MsgBox("v" rel.version " 으로 바꿨습니다. 다시 시작합니다." (note != "" ? "`n`n" note : ""), "업데이트", "0x40 T10")
+    Run('"' me '"')
+    ExitApp()
+}
+
+; 사이트 프로필 바꾸기
+;   새 파일          → 더한다
+;   손대지 않은 파일 → 새 것으로 바꾼다  (지난번 원본의 SHA256 과 같으면 손대지 않은 것)
+;   직접 고친 파일   → 그대로 두고, 새 판은 옆에 '이름.ini.new' 로 둔다
+; 원본 목록은 사이트\원본.txt (배포할 때 만든다). 이번 원본으로 바꿔 둔다.
+UpdateProfiles(unz)
+{
+    global profileDir
+
+    src := unz "\사이트"
+
+    if !DirExist(src)
+        return ""
+
+    oldSums := ReadSums(profileDir "\원본.txt")
+    kept := []
+
+    Loop Files src "\*.ini" {
+        name := A_LoopFileName
+        dst := profileDir "\" name
+
+        try {
+            if !FileExist(dst) {
+                FileCopy(A_LoopFileFullPath, dst)
+                continue
+            }
+
+            mine := FileSha256(dst)
+
+            if (mine = FileSha256(A_LoopFileFullPath))
+                continue
+
+            if (oldSums.Has(name) && oldSums[name] = mine) {
+                FileCopy(A_LoopFileFullPath, dst, 1)
+            } else {
+                FileCopy(A_LoopFileFullPath, dst ".new", 1)
+                kept.Push(name)
+            }
+        }
+    }
+
+    if FileExist(src "\원본.txt")
+        try FileCopy(src "\원본.txt", profileDir "\원본.txt", 1)
+
+    if !kept.Length
+        return ""
+
+    return "직접 고치신 사이트 프로필은 그대로 두었습니다: " Join(kept, ", ")
+        . "`n새 판은 같은 폴더에 '.new' 로 두었으니, 필요하면 비교해서 옮겨 주세요."
+}
+
+; 'SHA256  파일이름' 줄들 → Map(파일이름 → sha256)
+ReadSums(path)
+{
+    m := Map()
+    text := ""
+
+    try text := FileRead(path, "UTF-8")
+
+    for line in StrSplit(text, "`n", "`r")
+        if RegExMatch(line, "i)^([0-9a-f]{64})\s+\*?(.+?)\s*$", &x)
+            m[x[2]] := StrLower(x[1])
+
+    return m
+}
+
+; 지난 업데이트에서 이름만 바꿔 둔 옛 exe 지우기 (옛 프로그램이 아직 끝나는 중이면 조금 뒤에 한 번 더)
+CleanOldExe(again := true)
+{
+    if !A_IsCompiled
+        return
+
+    old := A_ScriptFullPath ".old"
+
+    if !FileExist(old)
+        return
+
+    try FileDelete(old)
+
+    if (again && FileExist(old))
+        SetTimer(() => CleanOldExe(false), -5000)
+}
+
+; https 주소 읽기 (WinHttp).  savePath 가 있으면 파일로 저장하고 "ok", 없으면 글(UTF-8)을 돌려준다.
+; 실패하면 "" 와 err
+HttpFetch(url, &err, savePath := "")
+{
+    global appVersion
+
+    err := ""
+
+    try {
+        req := ComObject("WinHttp.WinHttpRequest.5.1")
+        req.Open("GET", url, false)
+        req.SetRequestHeader("User-Agent", "edu-auto-next/" appVersion)       ; GitHub API 는 이것이 없으면 거절한다
+        req.SetRequestHeader("Accept", "application/vnd.github+json, */*")
+        req.SetTimeouts(5000, 5000, 15000, 60000)
+        req.Send()
+
+        if (req.Status != 200) {
+            err := "HTTP " req.Status " " req.StatusText
+            return ""
+        }
+
+        ; 글자 코드를 잘못 짐작하지 않도록 바이트로 받는다
+        arr := req.ResponseBody
+        psa := ComObjValue(arr)
+        ub := -1, pData := 0
+        DllCall("oleaut32\SafeArrayGetUBound", "ptr", psa, "uint", 1, "int*", &ub)
+        DllCall("oleaut32\SafeArrayAccessData", "ptr", psa, "ptr*", &pData)
+        size := ub + 1
+
+        if (savePath != "") {
+            f := FileOpen(savePath, "w")
+            f.RawWrite(pData, size)
+            f.Close()
+            out := "ok"
+        } else {
+            out := (size > 0) ? StrGet(pData, size, "UTF-8") : ""
+        }
+
+        DllCall("oleaut32\SafeArrayUnaccessData", "ptr", psa)
+
+        return out
+    } catch as e {
+        err := e.Message
+        return ""
+    }
+}
+
+; 파일의 SHA256 (소문자 16진수). 실패하면 ""
+FileSha256(path)
+{
+    try {
+        f := FileOpen(path, "r")
+        size := f.Length
+        buf := Buffer(Max(size, 1))
+
+        if size
+            f.RawRead(buf, size)
+
+        f.Close()
+    } catch {
+        return ""
+    }
+
+    hAlg := 0, hHash := 0
+    digest := Buffer(32, 0)
+
+    if DllCall("bcrypt\BCryptOpenAlgorithmProvider", "ptr*", &hAlg, "wstr", "SHA256", "ptr", 0, "uint", 0, "uint")
+        return ""
+
+    ok := !DllCall("bcrypt\BCryptCreateHash", "ptr", hAlg, "ptr*", &hHash, "ptr", 0, "uint", 0, "ptr", 0, "uint", 0, "uint", 0, "uint")
+        && !DllCall("bcrypt\BCryptHashData", "ptr", hHash, "ptr", buf, "uint", size, "uint", 0, "uint")
+        && !DllCall("bcrypt\BCryptFinishHash", "ptr", hHash, "ptr", digest, "uint", 32, "uint", 0, "uint")
+
+    if hHash
+        DllCall("bcrypt\BCryptDestroyHash", "ptr", hHash)
+
+    DllCall("bcrypt\BCryptCloseAlgorithmProvider", "ptr", hAlg, "uint", 0)
+
+    if !ok
+        return ""
+
+    hex := ""
+
+    loop 32
+        hex .= Format("{:02x}", NumGet(digest, A_Index - 1, "uchar"))
+
+    return hex
+}
+
+; JSON 에서 "key": "값" 하나 꺼내기 (릴리스 정보 읽기용의 간단한 것)
+JsonStr(json, key)
+{
+    if !RegExMatch(json, '"' key '"\s*:\s*"((?:[^"\\]|\\.)*)"', &m)
+        return ""
+
+    return JsonUnescape(m[1])
+}
+
+JsonUnescape(s)
+{
+    out := ""
+    i := 1
+    n := StrLen(s)
+
+    while (i <= n) {
+        c := SubStr(s, i, 1)
+
+        if (c != "\") {
+            out .= c
+            i += 1
+            continue
+        }
+
+        e := SubStr(s, i + 1, 1)
+
+        if (e == "n")
+            out .= "`n"
+        else if (e == "t")
+            out .= "`t"
+        else if (e == "r")
+            out .= ""
+        else if (e == "u") {
+            out .= Chr(Integer("0x" SubStr(s, i + 2, 4)))
+            i += 4
+        } else
+            out .= e          ; \"  \\  \/
+
+        i += 2
+    }
+
+    return out
+}
+
 Git(args, &out)
 {
     tmp := A_Temp "\코드로넘기기_git.txt"
@@ -990,9 +1469,9 @@ CheckUpdate(quiet := true)
     owner := (IsObject(gui3) && DllCall("IsWindowVisible", "ptr", gui3.Hwnd)) ? gui3.Hwnd : gui1.Hwnd
     say := (msg, opt := "0x40") => quiet ? "" : MsgBox(msg, "업데이트", opt " Owner" owner)
 
+    ; exe 로 쓰거나, git 으로 받지 않은 폴더면 GitHub Releases 에서 확인한다
     if (A_IsCompiled || !DirExist(A_ScriptDir "\.git")) {
-        say("이 폴더는 GitHub 에서 받은 저장소가 아니라서 업데이트를 확인할 수 없습니다."
-            . "`n(exe 로 만든 판이거나, 파일만 복사해 온 경우)", "0x30")
+        CheckReleaseUpdate(quiet, owner)
         return
     }
 
@@ -1111,7 +1590,8 @@ RefreshWindowList()
     windowHwnds := [0]
     listHwnds := [0]
     items := ["(자동으로 찾기)"]
-    listItems := ["(자동으로 찾기)"]
+    where := P("차시", "목록창", "학습창")
+    listItems := ["(자동으로 찾기 : " (where = "" ? "학습창" : where) " 창)"]
 
     for hwnd in WinGetList() {
         try {
@@ -1179,7 +1659,16 @@ PickListWindow()
         return
     }
 
-    ScanSessions(true)
+    ; 이 창에서 줄을 하나도 못 읽으면 빈 목록이 돌아온다 (전에 읽어 둔 표는 그대로 둔다)
+    if !ScanSessions(true).Length {
+        where := P("차시", "목록창", "학습창")
+        SetState("고르신 창에서는 차시 표를 찾지 못했습니다."
+            . "`n이 사이트의 차시 표는 '" (where = "" ? "학습창" : where) "' 창에 있습니다."
+            . "`n그 창을 고르거나, (자동으로 찾기) 로 두세요.")
+
+        return
+    }
+
     SetState(SessionReport())
 }
 
@@ -1214,18 +1703,20 @@ MatchProfileToWindow(hwnd)
     if (title = "")
         return
 
+    ; 여기서도 더 자세한(긴) 창제목이 이긴다
+    best := "", bestLen := 0
+
     for name in profileList {
         data := ReadProfileFile(profileDir "\" name ".ini")
         key := GetVal(data, "사이트", "창제목")
 
-        if (key != "" && InStr(title, key)) {
-            if (name != profName) {
-                ddSite.Choose(name)
-                UseProfile(name)
-            }
+        if (key != "" && StrLen(key) > bestLen && InStr(title, key))
+            best := name, bestLen := StrLen(key)
+    }
 
-            return
-        }
+    if (best != "" && best != profName) {
+        ddSite.Choose(best)
+        UseProfile(best)
     }
 }
 
@@ -1243,6 +1734,91 @@ EditProfile()
 
     try Run 'notepad.exe "' path '"'
     SetState("프로필을 고친 뒤 [다시 읽기] 를 누르면 바로 반영됩니다.")
+}
+
+; 고른 사이트의 교육 페이지를 기본 브라우저로 연다 (프로필 [사이트] 주소)
+;   프로필은 사용자가 고치는 파일이므로, http/https 주소만 열고 그 밖의 것은 실행하지 않는다.
+OpenSiteUrl()
+{
+    global profName
+
+    url := Trim(P("사이트", "주소"))
+
+    if (url = "") {
+        SetState("'" profName "' 프로필에는 교육 페이지 주소가 없습니다."
+            . "`n[설정] → 사이트 프로필 → [프로필 편집] 을 눌러 [사이트] 칸에 이렇게 적어 주세요."
+            . "`n`n    주소 = https://교육사이트주소")
+
+        return
+    }
+
+    if !RegExMatch(url, "i)^https?://")
+        url := "https://" url
+
+    if !RegExMatch(url, "i)^https?://[\w.\-]+(:\d+)?([/?#].*)?$") {
+        SetState("주소가 이상해서 열지 않았습니다.  (http:// 또는 https:// 로 된 주소만 엽니다)`n`n    " url)
+
+        return
+    }
+
+    try {
+        Run(url)
+        SetState("교육 페이지를 열었습니다.`n`n    " url)
+    } catch as e {
+        SetState("교육 페이지를 열지 못했습니다.`n`n    " url "`n    " e.Message)
+    }
+}
+
+; 🌐 위에 마우스가 오면 손 모양 커서 (WM_SETCURSOR)
+SiteUrlCursor(wParam, lParam, msg, hwnd)
+{
+    global btnSiteUrl
+
+    static hand := DllCall("LoadCursor", "ptr", 0, "ptr", 32649, "ptr")          ; IDC_HAND
+
+    if (!IsObject(btnSiteUrl) || wParam != btnSiteUrl.Hwnd)
+        return
+
+    DllCall("SetCursor", "ptr", hand)
+    SiteUrlHover(true)
+
+    return true
+}
+
+; 🌐 위에 올라오면 파랗게 + 어디로 가는지 풍선 도움말, 벗어나면 되돌린다
+SiteUrlHover(on)
+{
+    global btnSiteUrl
+
+    static shown := false
+
+    if (on = shown)
+        return
+
+    shown := on
+
+    if on {
+        url := Trim(P("사이트", "주소"))
+        btnSiteUrl.SetFont("c" UiColor("강조"))
+        ToolTip(url != "" ? "교육 페이지 열기`n" url : "교육 페이지 열기  (프로필에 주소가 없습니다)")
+        SetTimer(SiteUrlLeave, 150)
+    } else {
+        btnSiteUrl.SetFont("c" UiColor("글자"))
+        ToolTip()
+        SetTimer(SiteUrlLeave, 0)
+    }
+}
+
+SiteUrlLeave()
+{
+    global btnSiteUrl
+
+    ctl := 0
+
+    try MouseGetPos(, , , &ctl, 2)
+
+    if (ctl != btnSiteUrl.Hwnd)
+        SiteUrlHover(false)
 }
 
 ; --------------------------------------------------
@@ -3174,6 +3750,7 @@ ScanSessions(report := false)
     }
 
     KeepSessions(rows)
+    found := rows.Length
 
     for row in rows
         ObjRelease(row.el)
@@ -3183,7 +3760,8 @@ ScanSessions(report := false)
     if report
         ShowSessionInfo(SessionReport())
 
-    return sessionInfo
+    ; 이번에 한 줄도 못 읽었으면 빈 목록 (전에 읽어 둔 표는 sessionInfo 에 그대로 있다)
+    return found ? sessionInfo : []
 }
 
 ; 읽은 줄들을 {번호, 이름, 학습시간, 들었는지} 로 남겨 둔다
@@ -3197,11 +3775,30 @@ KeepSessions(rows)
     list := []
 
     for row in rows
-        list.Push({num: row.num, name: RegExReplace(Trim(row.name), "\s+", " "), time: row.time,
-            done: (row.time != "" && !RegExMatch(row.time, "^[0:]+$"))})
+        list.Push({num: row.num, name: RegExReplace(Trim(row.name), "\s+", " "), time: row.time
+            , pct: (row.HasOwnProp("pct") ? row.pct : -1), done: SessionListened(row)})
 
     sessionInfo := list
     sessionTotal := list.Length
+}
+
+; 이 차시를 들었는지
+;   진도율을 읽을 수 있으면 그것이 가장 정확하다 (100% 면 다 들은 것)
+;   아니면 학습 시간에 0 이 아닌 숫자가 하나라도 있으면 들은 것으로 본다
+;   ('0초', '00:00:00', '미학습' 은 안 들은 것)
+SessionListened(row)
+{
+    global sessionPct
+
+    pct := row.HasOwnProp("pct") ? row.pct : -1
+
+    if (pct < 0 && sessionPct.Has(row.num))
+        pct := sessionPct[row.num]
+
+    if (pct >= 0)
+        return pct >= 100
+
+    return (row.time != "" && RegExMatch(row.time, "[1-9]"))
 }
 
 ; 사람이 보도록 차시 목록을 적는다
@@ -3221,7 +3818,7 @@ SessionReport()
         if it.done
             doneN += 1
 
-        if (it.time != "")
+        if (it.time != "" || it.pct >= 0)
             knowTime := true
     }
 
@@ -3232,8 +3829,10 @@ SessionReport()
 
     for it in sessionInfo
         lines.Push(Format("{:2}", it.num) "차시  "
-            . (it.time != "" ? (it.done ? "들음   " : "안 들음 ") it.time "  " : "")
-            . SubStr(it.name, 1, 26))
+            . ((it.time != "" || it.pct >= 0) ? (it.done ? "다 들음  " : "남음     ") : "")
+            . (it.pct >= 0 ? Format("{:3}%  ", it.pct) : "")
+            . (it.time != "" ? it.time "  " : "")
+            . SubStr(it.name, 1, 24))
 
     return Join(lines, "`n")
 }
@@ -3264,7 +3863,7 @@ LastSessionLimit()
 ;   지금 차시 번호를 알면 그 다음 번호, 모르면 학습 시간이 00:00:00 인 첫 줄.
 ;   더 들을 차시가 없으면 알리고 멈춘다.
 ; --------------------------------------------------
-GoNextSession(st)
+GoNextSession(st, usePin := true)
 {
     global lectureHwnd, pinnedHwnd, pinnedListHwnd, sessionNum, holdUntil, sessionTried, sessionInfo, sessionTotal
     global sessionPct
@@ -3276,9 +3875,10 @@ GoNextSession(st)
 
     listWhere := P("차시", "목록창", "학습창")
     sameWindow := (listWhere = "" || listWhere = "학습창")
+    pinned := usePin && pinnedListHwnd && WinExist("ahk_id " pinnedListHwnd)
 
     ; 본체 창에서 차시 목록 창을 직접 골랐으면 그 창에서 누른다
-    if (pinnedListHwnd && WinExist("ahk_id " pinnedListHwnd)) {
+    if pinned {
         listHwnd := pinnedListHwnd
         sameWindow := (listHwnd = GetLectureWindow())
 
@@ -3323,10 +3923,35 @@ GoNextSession(st)
         }
     }
 
+    ; 차시 표를 하나도 못 읽었으면 '다 마쳤다' 가 아니다. 창을 잘못 골랐거나 표가 안 보이는 것
+    if !rows.Length {
+        ObjRelease(root)
+
+        ; 직접 고른 창에 차시 표가 없으면, 프로필에 적힌 창으로 한 번 더 찾는다
+        ;   (예: 한국보건복지인재원에서 '차시 목록' 에 학습창을 고른 경우. 표는 나의학습실 창에 있다)
+        if pinned {
+            pinnedListHwnd := 0
+            RefreshWindowList()
+            SetState("고르신 '차시 목록' 창에는 차시 표가 없어서, 프로필에 적힌 창('" listWhere "')에서 다시 찾습니다.")
+
+            return GoNextSession(st, false)
+        }
+
+        Notify("다음 차시로 가려 했지만 차시 표를 읽지 못했습니다."
+            . "`n'" listWhere "' 창이 열려 있는지 확인해 주세요.")
+
+        return false
+    }
+
     ; 읽은 김에 전체 차시 수도 갱신
     ; (진도창이 따로 있으면 그쪽이 학습 시간까지 알려 주므로 덮어쓰지 않는다)
     if (P("차시", "진도창") = "")
         KeepSessions(rows)
+
+    ; 방금 들은 차시의 진도율이 100 이 안 되면 알린다 (그래도 다음 차시로는 간다)
+    ;   사이트가 진도율을 늦게 올리거나, 학습 시간 기준이 따로 있을 수 있다
+    if (sessionNum > 0 && sessionPct.Has(sessionNum) && sessionPct[sessionNum] < 100)
+        Notify(sessionNum "차시 진도율이 " sessionPct[sessionNum] "% 로 나옵니다. 다음 차시로 넘어가지만, 나중에 나의 강의실에서 확인해 주세요.", false)
 
     target := ""
     skipped := []
@@ -3604,57 +4229,124 @@ SessionRowsByButton(root, sel)
 
             if (NumGet(r, 8, "int") > NumGet(r, 0, "int"))
                 texts.Push({x: NumGet(r, 0, "int"), y: (NumGet(r, 4, "int") + NumGet(r, 12, "int")) // 2, text: s
-                    , cell: U_Int(el, 21) = 50029})
+                    , w: NumGet(r, 8, "int") - NumGet(r, 0, "int"), cell: U_Int(el, 21) = 50029})
         }
 
         ObjRelease(el)
     }
 
+    ; 먼저 '같은 줄' 로 찾아 보고, 그렇게 안 되는 표는 '쌓인 칸' 으로 찾는다
+    rows := RowsFromButtons(btns, texts, false)
+
+    if !rows.Length
+        rows := RowsFromButtons(btns, texts, true)
+
+    ; 쓰이지 않은 버튼은 놓아 준다
+    used := Map()
+
+    for row in rows
+        used[row.el] := true
+
+    for el in btns
+        if !used.Has(el)
+            ObjRelease(el)
+
+    SortRowsByNum(rows)
+
+    return rows
+}
+
+; 버튼마다 차시 번호·이름·진도율을 찾아 줄로 만든다
+;   card = false : 버튼과 같은 높이에 있는 글에서 찾는다 (가로로 된 표. 산업안전포털)
+;   card = true  : 버튼 위쪽, 가로로 겹치는 칸에서 찾는다
+;                  (칸이 위아래로 쌓인 표. 한국보건복지인재원의 '차시 / 차시 명 / 진도율(%) / 학습상태')
+RowsFromButtons(btns, texts, card)
+{
+    global sessionPct
+
+    rows := []
     seen := Map()
 
     for el in btns {
         r := Buffer(16, 0)
         try ComCall(43, el, "ptr", r)
         y := (NumGet(r, 4, "int") + NumGet(r, 12, "int")) // 2
+        cx := (NumGet(r, 0, "int") + NumGet(r, 8, "int")) // 2
         bname := Trim(U_Str(el, 23))
 
-        num := -1, numX := 0, pct := -1, name := ""
+        num := -1, numX := 0, pct := -1, name := "", tspan := ""
 
-        ; 표 칸이 있는 줄이면 표 칸만 본다 (같은 높이에 뜬 안내창 글 등이 섞이지 않게)
-        hasCell := false
+        if card {
+            ; 이 버튼이 들어 있는 칸 묶음의 머리: 버튼 위쪽에서 가장 가까운 'N차시' 칸
+            head := ""
 
-        for tx in texts
-            if (tx.cell && Abs(tx.y - y) <= 45)
-                hasCell := true
+            for tx in texts {
+                if (tx.x > cx || tx.x + tx.w < cx || tx.y > y + 10)
+                    continue
 
-        for tx in texts {
-            if (Abs(tx.y - y) > 45 || (hasCell && !tx.cell))
-                continue
+                if !RegExMatch(tx.text, "(\d{1,3})\s*차시", &mn)
+                    continue
 
-            if RegExMatch(tx.text, "^\d{1,3}$") {
-                if (num < 0 || tx.x < numX)
-                    num := Integer(tx.text), numX := tx.x
-            } else if RegExMatch(tx.text, "^(\d{1,3})\s*%$", &mp) {
-                pct := Integer(mp[1])
-            } else if (tx.text != bname && !RegExMatch(tx.text, "^[\d\s.:/\-]+$") && StrLen(tx.text) > StrLen(name)) {
-                ; 날짜·시간·숫자만 있는 칸('2026.09.24 17:38:01', '-')은 이름이 아니다
-                name := tx.text
+                if (!IsObject(head) || tx.y > head.y)
+                    head := {y: tx.y, num: Integer(mn[1])}
+            }
+
+            if IsObject(head) {
+                num := head.num
+
+                ; 머리와 버튼 사이에 있는 칸들에서 이름·진도율·학습시간
+                for tx in texts {
+                    if (tx.x > cx || tx.x + tx.w < cx || tx.y < head.y - 5 || tx.y > y + 10)
+                        continue
+
+                    if RegExMatch(tx.text, "(\d{1,3})\s*%", &mp)
+                        pct := Integer(mp[1])
+                    else if RegExMatch(tx.text, "차시\s*명\s*(.+)$", &mm)
+                        name := Trim(mm[1])
+                    else if RegExMatch(tx.text, "학습\s*시간\s*(.+)$", &mt)
+                        tspan := Trim(mt[1])
+                }
+            }
+        } else {
+            ; 표 칸이 있는 줄이면 표 칸만 본다 (같은 높이에 뜬 안내창 글 등이 섞이지 않게)
+            hasCell := false
+
+            for tx in texts
+                if (tx.cell && Abs(tx.y - y) <= 45)
+                    hasCell := true
+
+            for tx in texts {
+                if (Abs(tx.y - y) > 45 || (hasCell && !tx.cell))
+                    continue
+
+                if RegExMatch(tx.text, "^\d{1,3}$") {
+                    if (num < 0 || tx.x < numX)
+                        num := Integer(tx.text), numX := tx.x
+                } else if RegExMatch(tx.text, "^(\d{1,3})\s*%$", &mp) {
+                    pct := Integer(mp[1])
+                } else if (tx.text != bname && !RegExMatch(tx.text, "^[\d\s.:/\-]+$") && StrLen(tx.text) > StrLen(name)) {
+                    ; 날짜·시간·숫자만 있는 칸('2026.09.24 17:38:01', '-')은 이름이 아니다
+                    name := tx.text
+                }
             }
         }
 
-        if (num < 1 || seen.Has(num)) {
-            ObjRelease(el)
+        if (num < 1 || seen.Has(num))
             continue
-        }
 
         seen[num] := true
-        rows.Push({num: num, time: "", name: name, y: y, el: el, pct: pct})
+        rows.Push({num: num, time: tspan, name: name, y: y, el: el, pct: pct})
 
         if (pct >= 0)
             sessionPct[num] := pct
     }
 
-    ; 번호 순으로
+    return rows
+}
+
+; 차시 번호 순으로
+SortRowsByNum(rows)
+{
     loop Max(rows.Length - 1, 0) {
         i := A_Index
 
@@ -3668,8 +4360,6 @@ SessionRowsByButton(root, sel)
             }
         }
     }
-
-    return rows
 }
 
 ; 한 가지 규칙으로 차시 줄 찾기
@@ -3892,10 +4582,20 @@ ReadSessionNum(root)
 
     ; 제목:선택자  →  그 글이 차시 목록의 어느 줄 이름으로 시작하는지로 번호를 찾는다
     ;   (영상 제목에 번호가 없는 사이트. 예: 산업안전포털 '[인트로] 안전보건의 중요성')
+    ;   제목:창제목  →  학습창의 창 제목에서 찾는다
+    ;   (한국보건복지인재원: 학습창에 차시 번호가 없고, 창 제목이 '인권의 이해 > OUTRO < 학습창 | ...')
     if (SubStr(rule, 1, 3) = "제목:") {
         global sessionInfo
 
-        t := ReadRule(root, Trim(SubStr(rule, 4)))
+        sel := Trim(SubStr(rule, 4))
+        t := ""
+
+        ; (try 뒤의 else 는 try 의 것으로 읽히므로 괄호로 묶는다)
+        if (sel = "창제목") {
+            try t := WinGetTitle("ahk_id " GetLectureWindow())
+        } else {
+            t := ReadRule(root, sel)
+        }
 
         if (t = "")
             return 0
@@ -4650,12 +5350,22 @@ ReadTextOf(root, sel)
     if (sel = "")
         return ""
 
+    ; 안쪽:선택자  →  그 요소의 이름은 무시하고, 안에 있는 글자만 모아 읽는다
+    ;   플레이어 조작 줄이 이런 경우가 있다.
+    ;   (한국보건복지인재원: 이름은 'Current time' 인데 정작 시간 00:11 은 그 안의 글자)
+    inner := false
+
+    if (SubStr(sel, 1, 3) = "안쪽:") {
+        inner := true
+        sel := Trim(SubStr(sel, 4))
+    }
+
     el := FindSel(root, sel)
 
     if !el
         return ""
 
-    t := Trim(StrReplace(StrReplace(U_Str(el, 23), "`n", " "), "`r", ""))
+    t := inner ? "" : Trim(StrReplace(StrReplace(U_Str(el, 23), "`n", " "), "`r", ""))
 
     ; 요소 자체에 읽을 이름이 없으면, 그 안의 글자들을 모아서 읽는다
     if (t = "")
