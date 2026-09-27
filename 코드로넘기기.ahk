@@ -29,7 +29,7 @@ if (!A_IsCompiled && FileExist(A_ScriptDir "\icon.ico"))
     TraySetIcon(A_ScriptDir "\icon.ico")
 SetTitleMatchMode 2
 
-global appVersion   := "1.6.4"      ; 바꾸면 CHANGELOG.md 에도 적는다
+global appVersion   := "1.6.5"      ; 바꾸면 CHANGELOG.md 에도 적는다
 global releaseRepo  := "Obsidiankorea/edu-auto-next"   ; 새 버전을 받는 GitHub 저장소 (Releases)
 global profileDir   := A_ScriptDir "\사이트"
 global settingFile  := A_ScriptDir "\코드로넘기기.ini"
@@ -4291,6 +4291,22 @@ KeepSessions(rows)
     sessionTotal := list.Length
 }
 
+; 방금 num 차시를 마쳤을 때 과정을 다 들은 것인지
+;   num 이 마지막 차시이고, 나머지 차시가 모두 '들음' 이면 참 (차시 표를 전에 읽어 두었어야 안다)
+AllSessionsDoneAfter(num)
+{
+    global sessionInfo, sessionTotal
+
+    if (sessionTotal <= 0 || num < sessionTotal || !sessionInfo.Length)
+        return false
+
+    for it in sessionInfo
+        if (it.num != num && !it.done)
+            return false
+
+    return true
+}
+
 ; 이 차시를 들었는지
 ;   진도율을 읽을 수 있으면 그것이 가장 정확하다 (100% 면 다 들은 것)
 ;   아니면 학습 시간에 0 이 아닌 숫자가 하나라도 있으면 들은 것으로 본다
@@ -4454,6 +4470,16 @@ GoNextSession(st, usePin := true)
             SetState("고르신 '차시 목록' 창에는 차시 표가 없어서, 프로필에 적힌 창('" listWhere "')에서 다시 찾습니다.")
 
             return GoNextSession(st, false)
+        }
+
+        ; 마지막 차시를 마쳤고 나머지 차시도 다 들었으면, 표를 못 읽어도 다 들은 것이다
+        ;   (한국보건복지인재원: 과정을 마치면 목록 창이 '설문조사' 페이지로 바뀌어 차시 표가 없어진다)
+        if AllSessionsDoneAfter(sessionNum) {
+            Notify("모든 차시를 마쳤습니다. 더 들을 차시가 없습니다.")
+            Stop("모든 차시를 마쳤습니다.")
+            CelebrateDone("모든 차시를 마쳤습니다.  (전체 " sessionTotal "차시)")
+
+            return true
         }
 
         Notify("다음 차시로 가려 했지만 차시 표를 읽지 못했습니다."
