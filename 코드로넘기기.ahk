@@ -29,7 +29,7 @@ if (!A_IsCompiled && FileExist(A_ScriptDir "\icon.ico"))
     TraySetIcon(A_ScriptDir "\icon.ico")
 SetTitleMatchMode 2
 
-global appVersion   := "1.6.5"      ; 바꾸면 CHANGELOG.md 에도 적는다
+global appVersion   := "1.6.6"      ; 바꾸면 CHANGELOG.md 에도 적는다
 global releaseRepo  := "Obsidiankorea/edu-auto-next"   ; 새 버전을 받는 GitHub 저장소 (Releases)
 global profileDir   := A_ScriptDir "\사이트"
 global settingFile  := A_ScriptDir "\코드로넘기기.ini"
@@ -3593,7 +3593,7 @@ FindAllSel(root, sel)
         if !terms.Length
             continue
 
-        cond := U_Cond(terms[1].prop, terms[1].val, terms[1].exact)
+        cond := TermCond(terms[1])
 
         if !cond
             continue
@@ -4776,7 +4776,7 @@ SessionRowsByButton(root, sel)
     if !IsObject(t)
         return rows
 
-    cond := U_Cond(t.prop, t.val, t.exact)
+    cond := TermCond(t)
 
     if !cond
         return rows
@@ -6115,7 +6115,7 @@ FindOne(root, expr)
     if !terms.Length
         return 0
 
-    cond := U_Cond(terms[1].prop, terms[1].val, terms[1].exact)
+    cond := TermCond(terms[1])
 
     if !cond
         return 0
@@ -6161,9 +6161,18 @@ FindOne(root, expr)
 ; 요소가 조건 하나에 맞는지 (따옴표로 적었으면 정확히 같아야 함)
 TermMatch(el, t)
 {
+    if t.HasProp("ctype")
+        return U_Int(el, 21) = t.ctype
+
     s := U_Str(el, t.idx)
 
     return t.exact ? (s = t.val) : InStr(s, t.val)
+}
+
+; 조건 하나로 찾기 조건 만들기 (종류는 숫자 조건)
+TermCond(t)
+{
+    return t.HasProp("ctype") ? U_CondInt(30003, t.ctype) : U_Cond(t.prop, t.val, t.exact)
 }
 
 ; 웹페이지(문서) 안에 있는 요소인지. 브라우저 틀(탭 줄·주소창·창 버튼)은 문서 밖에 있다
@@ -6218,6 +6227,17 @@ ParseTerm(piece)
 
     if (kind = "name")
         return {prop: 30005, idx: 23, val: val, exact: exact}
+
+    ; 종류:링크  → 그 종류의 요소만 (이름이 같은 풍선 글자와 링크를 가를 때)
+    ;   링크 / 버튼 / 글자 / 묶음 / 목록항목, 또는 UI Automation 종류 번호
+    if (kind = "종류" || kind = "type") {
+        static types := Map("링크", 50005, "버튼", 50000, "글자", 50020, "묶음", 50026, "목록항목", 50007
+            , "link", 50005, "button", 50000, "text", 50020, "group", 50026, "listitem", 50007)
+
+        ct := types.Has(val) ? types[val] : (IsInteger(val) ? Integer(val) : 0)
+
+        return ct ? {prop: 30003, idx: 21, val: val, exact: true, ctype: ct} : ""
+    }
 
     return ""
 }
