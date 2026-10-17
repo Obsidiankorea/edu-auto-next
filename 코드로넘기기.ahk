@@ -29,7 +29,7 @@ if (!A_IsCompiled && FileExist(A_ScriptDir "\icon.ico"))
     TraySetIcon(A_ScriptDir "\icon.ico")
 SetTitleMatchMode 2
 
-global appVersion   := "1.6.6"      ; 바꾸면 CHANGELOG.md 에도 적는다
+global appVersion   := "1.6.7"      ; 바꾸면 CHANGELOG.md 에도 적는다
 global releaseRepo  := "Obsidiankorea/edu-auto-next"   ; 새 버전을 받는 GitHub 저장소 (Releases)
 global profileDir   := A_ScriptDir "\사이트"
 global settingFile  := A_ScriptDir "\코드로넘기기.ini"
@@ -1350,9 +1350,64 @@ CleanOldExe(again := true)
         SetTimer(() => CleanOldExe(false), -5000)
 }
 
-; https 주소 읽기 (WinHttp).  savePath 가 있으면 파일로 저장하고 "ok", 없으면 글(UTF-8)을 돌려준다.
+; https 주소 읽기.  savePath 가 있으면 파일로 저장하고 "ok", 없으면 글(UTF-8)을 돌려준다.
 ; 실패하면 "" 와 err
+;   네트워크가 잠깐 느린 PC 에서 '작업 시간을 초과했습니다(0x80072EE2)' 로 업데이트가 막혔다.
+;   (릴리스 첨부 파일은 다른 서버로 넘겨 받는데, 연결 대기가 5초뿐이었다)
+;   → 대기 시간을 늘리고, 2초 쉬며 3번까지 다시 해 보고, 파일 받기는 마지막에 윈도우의 curl 로 한 번 더.
 HttpFetch(url, &err, savePath := "")
+{
+    Loop 3 {
+        out := HttpFetchOnce(url, &err, savePath)
+
+        if (out != "")
+            return out
+
+        ; 주소가 틀렸거나(404) 거절된 것은 다시 해도 같다
+        if RegExMatch(err, "^HTTP 4\d\d")
+            return ""
+
+        if (A_Index < 3)
+            Sleep 2000
+    }
+
+    if (savePath != "") {
+        e1 := err
+
+        if (CurlFetch(url, savePath, &e2) != "")
+            return "ok"
+
+        err := e1 "`n(curl 로도 받지 못했습니다: " e2 ")"
+    }
+
+    return ""
+}
+
+; 윈도우 10 부터 들어 있는 curl.exe 로 파일 받기. 잘 되면 "ok"
+CurlFetch(url, savePath, &err)
+{
+    err := ""
+    curl := A_WinDir "\System32\curl.exe"
+
+    if !FileExist(curl) {
+        err := "curl 이 없습니다"
+        return ""
+    }
+
+    try FileDelete(savePath)
+
+    code := -1
+
+    try code := RunWait('"' curl '" -sS -L --fail --retry 2 --connect-timeout 30 --max-time 300 -o "' savePath '" "' url '"', , "Hide")
+
+    if (code = 0 && FileExist(savePath) && FileGetSize(savePath) > 0)
+        return "ok"
+
+    err := "curl 종료 코드 " code
+    return ""
+}
+
+HttpFetchOnce(url, &err, savePath := "")
 {
     global appVersion
 
@@ -1363,7 +1418,7 @@ HttpFetch(url, &err, savePath := "")
         req.Open("GET", url, false)
         req.SetRequestHeader("User-Agent", "edu-auto-next/" appVersion)       ; GitHub API 는 이것이 없으면 거절한다
         req.SetRequestHeader("Accept", "application/vnd.github+json, */*")
-        req.SetTimeouts(5000, 5000, 15000, 60000)
+        req.SetTimeouts(15000, 20000, 30000, 120000)          ; 이름 찾기, 연결, 보내기, 받기 (밀리초)
         req.Send()
 
         if (req.Status != 200) {
