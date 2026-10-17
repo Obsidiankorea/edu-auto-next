@@ -29,7 +29,7 @@ if (!A_IsCompiled && FileExist(A_ScriptDir "\icon.ico"))
     TraySetIcon(A_ScriptDir "\icon.ico")
 SetTitleMatchMode 2
 
-global appVersion   := "1.6.8"      ; 바꾸면 CHANGELOG.md 에도 적는다
+global appVersion   := "1.6.9"      ; 바꾸면 CHANGELOG.md 에도 적는다
 global releaseRepo  := "Obsidiankorea/edu-auto-next"   ; 새 버전을 받는 GitHub 저장소 (Releases)
 global profileDir   := A_ScriptDir "\사이트"
 global settingFile  := A_ScriptDir "\코드로넘기기.ini"
@@ -124,6 +124,7 @@ global sessionTried := Map()       ; 이미 눌러 본 차시 번호
 global sessionPct := Map()         ; 차시 번호 → 진도율 (학습창 목록에서 읽음. 100 이면 다 들음)
 global endedSince := 0             ; '끝남' 표시를 처음 본 시각 (안내창이 뜰 틈을 준다)
 global noticeSeen := Map()         ; 이미 알린 모르는 안내창 글
+global lectureBrowser := ""        ; 강의 창 브라우저 프로그램 이름 (msedge.exe 이면 알림)
 global nextPendNum := 0            ; 눌렀지만 아직 안 넘어간 차시 번호 (0 이면 없음)
 global nextPendCount := 0          ; 그 차시를 누른 횟수
 global nextPendTick := 0           ; 마지막으로 누른 시각
@@ -2089,6 +2090,11 @@ TickBody()
     }
 
     title := WinGetTitle("ahk_id " hwnd)
+
+    ; Edge 는 지원하지 않는다 (화면 코드를 다르게 내보내 차시 목록 등을 못 읽는 경우가 있다)
+    global lectureBrowser
+    lectureBrowser := ""
+    try lectureBrowser := WinGetProcessName("ahk_id " hwnd)
     txtWindow.Text := title
     KeepOnTop(hwnd)
 
@@ -6016,9 +6022,12 @@ StateText(st)
 
     if (st.quiz && quizNote != "")
         lines.Push("           " quizNote)
-    global topHwnd
+    global topHwnd, lectureBrowser
     lines.Push("창       : " (covered ? "다른 창에 완전히 가려짐 → 이러면 영상이 멈춥니다" : "보임 (정상)")
         . (topHwnd ? "   · 항상 위" : ""))
+
+    if (lectureBrowser = "msedge.exe")
+        lines.Push("브라우저 : ⚠ Edge 는 차시 목록 등을 못 읽는 경우가 있어 지원하지 않습니다. Chrome 이나 Brave 를 쓰세요.")
 
     if (st.notice != "")
         lines.Push("안내     : " st.notice)

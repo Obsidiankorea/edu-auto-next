@@ -13,6 +13,8 @@
 
 ## 시작하기
 
+> **지원 브라우저: Chrome, Brave.** Microsoft Edge 는 화면 코드를 다르게 내보내서 차시 목록 등을 못 읽는 경우가 있어 지원하지 않습니다.
+
 1. [AutoHotkey v2](https://www.autohotkey.com/) 를 설치합니다.
 2. 이 저장소를 받습니다. (업데이트 확인을 쓰려면 zip 이 아니라 `git clone` 으로 받아야 합니다)
    ```bash
