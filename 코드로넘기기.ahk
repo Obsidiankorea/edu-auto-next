@@ -29,7 +29,7 @@ if (!A_IsCompiled && FileExist(A_ScriptDir "\icon.ico"))
     TraySetIcon(A_ScriptDir "\icon.ico")
 SetTitleMatchMode 2
 
-global appVersion   := "1.6.7"      ; 바꾸면 CHANGELOG.md 에도 적는다
+global appVersion   := "1.6.8"      ; 바꾸면 CHANGELOG.md 에도 적는다
 global releaseRepo  := "Obsidiankorea/edu-auto-next"   ; 새 버전을 받는 GitHub 저장소 (Releases)
 global profileDir   := A_ScriptDir "\사이트"
 global settingFile  := A_ScriptDir "\코드로넘기기.ini"
@@ -124,6 +124,10 @@ global sessionTried := Map()       ; 이미 눌러 본 차시 번호
 global sessionPct := Map()         ; 차시 번호 → 진도율 (학습창 목록에서 읽음. 100 이면 다 들음)
 global endedSince := 0             ; '끝남' 표시를 처음 본 시각 (안내창이 뜰 틈을 준다)
 global noticeSeen := Map()         ; 이미 알린 모르는 안내창 글
+global nextPendNum := 0            ; 눌렀지만 아직 안 넘어간 차시 번호 (0 이면 없음)
+global nextPendCount := 0          ; 그 차시를 누른 횟수
+global nextPendTick := 0           ; 마지막으로 누른 시각
+global nextBlocked := false        ; 3번 눌러도 안 넘어감 → 사이트가 막는 것으로 보고 3분마다만 다시 눌러 본다
 global awaitFresh := 0             ; 차시를 넘긴 시각. 새 영상이 도는 것을 볼 때까지 '끝남' 을 믿지 않는다 (0 이면 아님)
 global chkOnTop                    ; 진행 중에는 강의 창을 항상 위에
 global topHwnd := 0                ; 진행 중 항상 위로 두고 있는 강의 창
@@ -1964,9 +1968,10 @@ Start()
         return
     }
 
-    global courseDone
+    global courseDone, nextPendNum, nextPendCount, nextBlocked
 
     running := true
+    nextPendNum := 0, nextPendCount := 0, nextBlocked := false
     pressCount := 0
     holdUntil := 0
     doneNotified := false
@@ -2148,6 +2153,16 @@ TickBody()
 
     if (n > 0)
         sessionNum := n
+
+    ; 눌러 둔 차시로 실제로 넘어갔으면 기록을 지운다 (막혀 있었으면 넘어갔다고 알린다)
+    global nextPendNum, nextPendCount, nextBlocked
+
+    if (nextPendNum && n >= nextPendNum) {
+        if nextBlocked
+            Notify(n "차시로 넘어갔습니다. 이어서 진행합니다.", false)
+
+        nextPendNum := 0, nextPendCount := 0, nextBlocked := false
+    }
 
     ; 영상 없이 퀴즈만 있는 페이지는, 한 번 퀴즈로 알아보면 페이지가 바뀔 때까지 퀴즈로 본다
     ; ('퀴즈 시작' 을 누르고 나면 퀴즈 표시가 사라지는 사이트가 있음)
@@ -2452,7 +2467,7 @@ UpdateOverlay(st := "", note := "")
         video := "❚❚"
 
     ; 사람이 봐야 할 때: 설정에서 켰으면 빨강(진해졌다 연해졌다), 아니면 노랑
-    global chkAlertRed, stuckOn
+    global chkAlertRed, stuckOn, nextBlocked
 
     attnLook := (IsObject(chkAlertRed) && chkAlertRed.Value) ? "주의" : "퀴즈"
 
@@ -2460,6 +2475,8 @@ UpdateOverlay(st := "", note := "")
         emo := "📝", word := "자동", look := "퀴즈"          ; 알아서 푸는 중
     else if st.quiz
         emo := "📝", word := "퀴즈", look := attnLook        ; 직접 풀어야 함
+    else if (running && nextBlocked)
+        emo := "⚠", word := "차시 막힘", look := attnLook   ; 다음 차시를 3번 눌러도 안 넘어감
     else if (ended && last)
         emo := "🎓", word := "", look := "완료"
     else if !readable
@@ -2567,6 +2584,11 @@ NeedsAttention(st)
     if st.quiz
         return (chkQuizAuto.Value && (!quizStuck || forceActive)) ? "" : "quiz"
 
+    global nextBlocked
+
+    if nextBlocked
+        return "blocked"
+
     return stuckOn ? "stuck" : ""
 }
 
@@ -2623,6 +2645,7 @@ ShowAttentionPopup(kind)
     CloseAttentionPopup()
 
     quiz := (kind = "quiz")
+    blocked := (kind = "blocked")
     g := Gui("+AlwaysOnTop -MinimizeBox", "확인해 주세요")
     g.BackColor := UiColor("바탕")
     g.MarginX := 28
@@ -2631,9 +2654,11 @@ ShowAttentionPopup(kind)
     g.SetFont("s26", "Segoe UI Emoji")
     g.Add("Text", "xm w380 Center", quiz ? "📝" : "⚠")
     g.SetFont("s14 bold c" UiColor("글자"), "맑은 고딕")
-    g.Add("Text", "xm y+2 w380 Center", quiz ? "퀴즈를 직접 풀어 주세요" : "진행이 멈췄습니다")
+    g.Add("Text", "xm y+2 w380 Center", quiz ? "퀴즈를 직접 풀어 주세요" : blocked ? "다음 차시로 넘어가지 않습니다" : "진행이 멈췄습니다")
     UiNote(g, "xm y+8 w380 Center", quiz
         ? "자동으로 풀 수 없는 퀴즈입니다. 풀고 나면 이어서 진행합니다."
+        : blocked
+        ? "다음 차시를 3번 눌렀지만 사이트가 넘겨 주지 않습니다.`n지금 차시가 아직 다 들은 것으로 인정되지 않았을 수 있습니다 (학습시간·진도).`n3분마다 다시 눌러 보고, 넘어가면 이 창은 저절로 닫힙니다."
         : "2분 동안 시간·페이지가 그대로입니다.`n돌발 퀴즈나 안내창이 떠 있는지 확인해 주세요.")
     g.SetFont("s10 norm c" UiColor("글자"), "맑은 고딕")
     b1 := g.Add("Button", "xm+40 y+18 w150 h38 Default", "강의 창 보기")
@@ -4446,12 +4471,17 @@ LastSessionLimit()
 GoNextSession(st, usePin := true)
 {
     global lectureHwnd, pinnedHwnd, pinnedListHwnd, sessionNum, holdUntil, sessionTried, sessionInfo, sessionTotal
-    global sessionPct
+    global sessionPct, nextPendNum, nextPendCount, nextPendTick, nextBlocked
 
     rule := P("차시", "차시링크")
 
     if (rule = "")
         return false
+
+    ; 다음 차시를 3번 눌러도 안 넘어갔으면 사이트가 막고 있는 것으로 보고 3분에 한 번만 다시 눌러 본다
+    ;   (지방자치인재개발원: 앞 차시가 다 들은 것으로 인정되기 전에는 다음 차시를 눌러도 지금 차시로 되돌린다)
+    if (nextBlocked && A_TickCount - nextPendTick < 180000)
+        return true
 
     listWhere := P("차시", "목록창", "학습창")
     sameWindow := (listWhere = "" || listWhere = "학습창")
@@ -4613,6 +4643,20 @@ GoNextSession(st, usePin := true)
     }
 
     num := target.num
+
+    ; 같은 차시를 몇 번째 누르는지. 세 번 눌러도 안 넘어갔으면 '막힘' 으로 알린다
+    if (num = nextPendNum && nextPendCount >= 3 && !nextBlocked) {
+        nextBlocked := true
+        Notify(num "차시를 " nextPendCount "번 눌렀지만 넘어가지 않습니다. 사이트가 막고 있을 수 있습니다."
+            . "`n" sessionNum "차시가 아직 다 들은 것으로 인정되지 않았을 수 있습니다 (학습시간·진도). 3분마다 다시 눌러 봅니다.")
+    }
+
+    if (num = nextPendNum)
+        nextPendCount += 1
+    else
+        nextPendNum := num, nextPendCount := 1
+
+    nextPendTick := A_TickCount
 
     ; 같은 창에서 누르는 경우, 영상 창(팝업)을 먼저 닫아야 하는 사이트 ([차시] 넘기기전 = [누를것] 이름)
     before := P("차시", "넘기기전")
@@ -5412,6 +5456,13 @@ Act(root, st)
 
     isPaused := st.playKnown ? !st.playing : (st.timeCur >= 0 && !TimeMoving())
 
+    ; 다음 차시를 눌러 두고 기다리는 중이면 지난 차시의 마지막 페이지를 다시 틀지 않는다
+    ;   (막혀 있을 때 마지막 페이지가 끝없이 다시 재생되며 '멈춤' 알림도 안 울렸다)
+    global nextPendNum
+
+    if (nextPendNum && sessionNum < nextPendNum)
+        return
+
     if (isPaused && !covered && chkPlay.Value && P("동작", "멈춰있으면") != "") {
         if (StalledSec() < StallNeedSec())
             return
@@ -5945,6 +5996,14 @@ StateText(st)
 
     lines.Push("다음차시 : " (chkNextSession.Value ? "자동 (켬)" : "끔 — 이 차시가 끝나면 멈춤")
         . (done.Length ? "   · 다 들은 차시 " Join(done, "·") " 건너뜀" : ""))
+
+    global nextPendNum, nextPendCount, nextPendTick, nextBlocked
+
+    if nextBlocked
+        lines.Push("           ⚠ " nextPendNum "차시를 " nextPendCount "번 눌렀지만 넘어가지 않습니다 (사이트가 막는 중일 수 있음)."
+            . " " Max(0, 180 - (A_TickCount - nextPendTick) // 1000) "초 뒤 다시 눌러 봅니다.")
+    else if (nextPendNum && sessionNum < nextPendNum)
+        lines.Push("           " nextPendNum "차시를 눌렀습니다 (" nextPendCount "번째). 넘어가기를 기다립니다.")
 
     lines.Push("재생     : " (st.playKnown ? (st.playing ? "재생 중" : "멈춰 있음") : (st.timeTotal > 0 ? (TimeMoving() ? "재생 중 (시간으로 판단)" : "멈춤 (시간으로 판단)") : "모름"))
         . (stalled < 3 ? "  (시간 흐르는 중)"
