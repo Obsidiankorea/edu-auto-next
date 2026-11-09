@@ -29,7 +29,7 @@ if (!A_IsCompiled && FileExist(A_ScriptDir "\icon.ico"))
     TraySetIcon(A_ScriptDir "\icon.ico")
 SetTitleMatchMode 2
 
-global appVersion   := "1.6.9"      ; 바꾸면 CHANGELOG.md 에도 적는다
+global appVersion   := "1.7.0"      ; 바꾸면 CHANGELOG.md 에도 적는다
 global releaseRepo  := "Obsidiankorea/edu-auto-next"   ; 새 버전을 받는 GitHub 저장소 (Releases)
 global profileDir   := A_ScriptDir "\사이트"
 global settingFile  := A_ScriptDir "\코드로넘기기.ini"
@@ -5732,7 +5732,7 @@ ReadState(root)
         st.timeTotal := tot
 
     ; 한 덩어리로 된 경우도 지원 ("01:27 / 01:42")
-    if (st.timeTotal < 0) {
+    if (st.timeTotal < 0 || st.timeCur < 0) {          ; 전체 시간만 잡히고 현재 시간을 못 읽었어도 한 덩어리에서 다시
         t := ReadRule(box, P("읽을것", "현재시간"))
 
         if RegExMatch(t, "(\d{1,2}:\d{2}(?::\d{2})?)\s*/\s*(\d{1,2}:\d{2}(?::\d{2})?)", &m) {
@@ -5761,6 +5761,10 @@ ReadState(root)
     } else if RegExMatch(pt, "(\d{1,3})\s*[/|]\s*(\d{1,3})", &mp2) {
         st.pageCur := Integer(mp2[1])
         st.pageTotal := Integer(mp2[2])
+    } else if (RegExMatch(pt, "^\s*(\d{1,3})\s+(\d{1,3})\s*$", &mp3) && Integer(mp3[1]) <= Integer(mp3[2])) {
+        ; '01' ++ '09' 처럼 사이에 / 없이 이어 읽은 두 숫자 (지방자치인재개발원 ④ fs 플레이어)
+        st.pageCur := Integer(mp3[1])
+        st.pageTotal := Integer(mp3[2])
     }
 
     st.notice := ReadTextOf(root, P("읽을것", "안내문구"))
@@ -6368,6 +6372,89 @@ ParseTerm(piece)
 ; 창을 앞으로 끌어내지 않는 방법(기본동작)을 먼저 쓴다.
 ; '창을 앞으로 가져오지 않기' 를 껐을 때만, 안 될 경우 Invoke 로 넘어간다.
 ; (Invoke 는 브라우저 창을 맨 앞으로 끌어내므로 다른 작업을 방해한다)
+; 브라우저 안 요소 한가운데에 마우스 클릭 신호를 보낸다 (그 브라우저 창의 렌더 창으로 PostMessage).
+; 창을 앞으로 가져오지 않고 실제 커서도 움직이지 않는다. 보낼 곳을 못 찾으면 false
+PostClick(el)
+{
+    ; 스크롤 밖(뷰포트 밖) 요소면 보내지 않는다. 좌표가 웹페이지 밖으로 나가 툴바·주소창이 눌릴 수 있다
+    if U_Int(el, 38)                                       ; IsOffscreen (화면이 아니라 뷰포트 기준이라 F11 밀어두기와는 무관)
+        return false
+
+    ; 좌표는 모니터별 배율 기준으로 계산한다. Chrome 은 받은 좌표를 물리 픽셀로 읽는데,
+    ; 이 스크립트는 시스템 배율 기준이라 배율이 다른 모니터에서는 클릭이 어긋난다
+    oldCtx := DllCall("SetThreadDpiAwarenessContext", "ptr", -4, "ptr")      ; PER_MONITOR_AWARE_V2
+
+    try
+        return PostClickAt(el)
+    finally
+        DllCall("SetThreadDpiAwarenessContext", "ptr", oldCtx, "ptr")
+}
+
+PostClickAt(el)
+{
+    r := Buffer(16, 0)
+    try ComCall(43, el, "ptr", r)
+    l := NumGet(r, 0, "int"), t := NumGet(r, 4, "int"), rr := NumGet(r, 8, "int"), b := NumGet(r, 12, "int")
+
+    if (rr <= l || b <= t)
+        return false
+
+    ; 요소에서 위로 올라가며 창 핸들이 있는 곳을 찾아 그 최상위 창으로
+    top := 0
+    cur := U_Parent(el)
+
+    Loop 80 {
+        if !cur
+            break
+
+        h := 0
+        try ComCall(36, cur, "ptr*", &h)                   ; get_CurrentNativeWindowHandle
+
+        if h {
+            top := DllCall("GetAncestor", "ptr", h, "uint", 2, "ptr")      ; GA_ROOT
+            ObjRelease(cur)
+            break
+        }
+
+        up := U_Parent(cur)
+        ObjRelease(cur)
+        cur := up
+    }
+
+    rw := 0
+
+    if top
+        try rw := ControlGetHwnd("Chrome_RenderWidgetHostHWND1", "ahk_id " top)
+
+    if !rw
+        return false
+
+    pt := Buffer(8, 0)
+    NumPut("int", (l + rr) // 2, pt, 0), NumPut("int", (t + b) // 2, pt, 4)
+    DllCall("ScreenToClient", "ptr", rw, "ptr", pt)
+    x := NumGet(pt, 0, "int"), y := NumGet(pt, 4, "int")
+
+    ; 웹페이지 영역 밖이면 보내지 않는다 (잘린 요소 등). false 면 원래 방식(기본 동작)으로 누른다
+    cr := Buffer(16, 0)
+    DllCall("GetClientRect", "ptr", rw, "ptr", cr)
+
+    if (x < 0 || y < 0 || x >= NumGet(cr, 8, "int") || y >= NumGet(cr, 12, "int"))
+        return false
+
+    lp := (y << 16) | (x & 0xFFFF)
+
+    try {
+        PostMessage(0x200, 0, lp, , "ahk_id " rw)          ; 마우스 이동
+        Sleep 40
+        PostMessage(0x201, 1, lp, , "ahk_id " rw)          ; 왼쪽 누름
+        Sleep 60
+        PostMessage(0x202, 0, lp, , "ahk_id " rw)          ; 왼쪽 뗌
+    } catch
+        return false
+
+    return true
+}
+
 PressElement(el)
 {
     global chkNoFront, lastPressError
@@ -6380,6 +6467,20 @@ PressElement(el)
         lastPressError := "누르기 기능이 없는 요소"
 
     if pat {
+        ; 기본 동작이 '두 번 클릭' 인 요소는 기본 동작으로 눌러도 사이트가 반응하지 않는다
+        ;   (지방자치인재개발원 ④ fs 플레이어의 '다음페이지' 목록 칸. 클릭을 바깥쪽에서 받는 듯)
+        ;   → 그 자리에 마우스 클릭 신호를 보낸다. 창을 앞으로 가져오지 않고 커서도 움직이지 않는다.
+        verb := ""
+        pv := 0
+        try ComCall(15, pat, "ptr*", &pv)                  ; get_CurrentDefaultAction
+        if pv
+            verb := StrGet(pv, "UTF-16"), DllCall("oleaut32\SysFreeString", "ptr", pv)
+
+        if RegExMatch(verb, "i)두 번|double") && PostClick(el) {
+            ObjRelease(pat)
+            return "마우스신호"
+        }
+
         ok := false
 
         try {
