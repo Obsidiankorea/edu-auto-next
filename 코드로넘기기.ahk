@@ -29,7 +29,7 @@ if (!A_IsCompiled && FileExist(A_ScriptDir "\icon.ico"))
     TraySetIcon(A_ScriptDir "\icon.ico")
 SetTitleMatchMode 2
 
-global appVersion   := "1.7.0"      ; 바꾸면 CHANGELOG.md 에도 적는다
+global appVersion   := "1.7.1"      ; 바꾸면 CHANGELOG.md 에도 적는다
 global releaseRepo  := "Obsidiankorea/edu-auto-next"   ; 새 버전을 받는 GitHub 저장소 (Releases)
 global profileDir   := A_ScriptDir "\사이트"
 global settingFile  := A_ScriptDir "\코드로넘기기.ini"
@@ -6376,7 +6376,11 @@ ParseTerm(piece)
 ; 창을 앞으로 가져오지 않고 실제 커서도 움직이지 않는다. 보낼 곳을 못 찾으면 false
 PostClick(el)
 {
-    ; 스크롤 밖(뷰포트 밖) 요소면 보내지 않는다. 좌표가 웹페이지 밖으로 나가 툴바·주소창이 눌릴 수 있다
+    ; 창을 작게 해 버튼이 잘려 있으면 클릭 신호를 보낼 수 없다 → 먼저 페이지를 스크롤해 버튼이 보이게 한다
+    ;   (창 크기·위치는 건드리지 않는다. 지방자치인재개발원 ④ 는 플레이어가 창보다 넓어 '다음페이지' 가 잘리곤 한다)
+    ScrollIntoViewIfCut(el)
+
+    ; 그래도 스크롤 밖(뷰포트 밖)이면 보내지 않는다. 좌표가 웹페이지 밖으로 나가 툴바·주소창이 눌릴 수 있다
     if U_Int(el, 38)                                       ; IsOffscreen (화면이 아니라 뷰포트 기준이라 F11 밀어두기와는 무관)
         return false
 
@@ -6399,32 +6403,7 @@ PostClickAt(el)
     if (rr <= l || b <= t)
         return false
 
-    ; 요소에서 위로 올라가며 창 핸들이 있는 곳을 찾아 그 최상위 창으로
-    top := 0
-    cur := U_Parent(el)
-
-    Loop 80 {
-        if !cur
-            break
-
-        h := 0
-        try ComCall(36, cur, "ptr*", &h)                   ; get_CurrentNativeWindowHandle
-
-        if h {
-            top := DllCall("GetAncestor", "ptr", h, "uint", 2, "ptr")      ; GA_ROOT
-            ObjRelease(cur)
-            break
-        }
-
-        up := U_Parent(cur)
-        ObjRelease(cur)
-        cur := up
-    }
-
-    rw := 0
-
-    if top
-        try rw := ControlGetHwnd("Chrome_RenderWidgetHostHWND1", "ahk_id " top)
+    rw := RenderWidgetOf(el)
 
     if !rw
         return false
@@ -6453,6 +6432,82 @@ PostClickAt(el)
         return false
 
     return true
+}
+
+; 요소가 들어 있는 브라우저 창의 렌더 창 (Chrome_RenderWidgetHostHWND). 못 찾으면 0
+RenderWidgetOf(el)
+{
+    ; 요소에서 위로 올라가며 창 핸들이 있는 곳을 찾아 그 최상위 창으로
+    top := 0
+    cur := U_Parent(el)
+
+    Loop 80 {
+        if !cur
+            break
+
+        h := 0
+        try ComCall(36, cur, "ptr*", &h)                   ; get_CurrentNativeWindowHandle
+
+        if h {
+            top := DllCall("GetAncestor", "ptr", h, "uint", 2, "ptr")      ; GA_ROOT
+            ObjRelease(cur)
+            break
+        }
+
+        up := U_Parent(cur)
+        ObjRelease(cur)
+        cur := up
+    }
+
+    rw := 0
+
+    if top
+        try rw := ControlGetHwnd("Chrome_RenderWidgetHostHWND1", "ahk_id " top)
+
+    return rw
+}
+
+; 요소가 잘려 있거나 스크롤 밖이면 접근성 'ScrollIntoView' 로 보이게 한다
+ScrollIntoViewIfCut(el)
+{
+    if !U_Int(el, 38) && ElementInClient(el)
+        return
+
+    pat := 0
+    try ComCall(16, el, "int", 10017, "ptr*", &pat)        ; ScrollItemPattern
+
+    if !pat
+        return
+
+    try ComCall(3, pat)                                    ; ScrollIntoView
+    ObjRelease(pat)
+    Sleep 400
+}
+
+; 요소 한가운데가 그 브라우저 렌더 창의 보이는 영역 안에 있는지 (모니터별 배율 기준)
+ElementInClient(el)
+{
+    oldCtx := DllCall("SetThreadDpiAwarenessContext", "ptr", -4, "ptr")
+
+    try {
+        r := Buffer(16, 0)
+        try ComCall(43, el, "ptr", r)
+        cx := (NumGet(r, 0, "int") + NumGet(r, 8, "int")) // 2, cy := (NumGet(r, 4, "int") + NumGet(r, 12, "int")) // 2
+        rw := RenderWidgetOf(el)
+
+        if !rw
+            return true                                    ; 모르면 스크롤하지 않는다
+
+        pt := Buffer(8, 0)
+        NumPut("int", cx, pt, 0), NumPut("int", cy, pt, 4)
+        DllCall("ScreenToClient", "ptr", rw, "ptr", pt)
+        cr := Buffer(16, 0)
+        DllCall("GetClientRect", "ptr", rw, "ptr", cr)
+        x := NumGet(pt, 0, "int"), y := NumGet(pt, 4, "int")
+
+        return x >= 0 && y >= 0 && x < NumGet(cr, 8, "int") && y < NumGet(cr, 12, "int")
+    } finally
+        DllCall("SetThreadDpiAwarenessContext", "ptr", oldCtx, "ptr")
 }
 
 PressElement(el)
