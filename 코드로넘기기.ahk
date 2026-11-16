@@ -29,7 +29,7 @@ if (!A_IsCompiled && FileExist(A_ScriptDir "\icon.ico"))
     TraySetIcon(A_ScriptDir "\icon.ico")
 SetTitleMatchMode 2
 
-global appVersion   := "1.7.3"      ; 바꾸면 CHANGELOG.md 에도 적는다
+global appVersion   := "1.7.4"      ; 바꾸면 CHANGELOG.md 에도 적는다
 global releaseRepo  := "Obsidiankorea/edu-auto-next"   ; 새 버전을 받는 GitHub 저장소 (Releases)
 global profileDir   := A_ScriptDir "\사이트"
 global settingFile  := A_ScriptDir "\코드로넘기기.ini"
@@ -5469,6 +5469,12 @@ Act(root, st)
     if (nextPendNum && sessionNum < nextPendNum)
         return
 
+    ; 재생 단추를 못 찾았다고 이미 알렸는지 (다시 흐르거나 누르면 풀림)
+    static playMissNoted := false
+
+    if !isPaused
+        playMissNoted := false
+
     if (isPaused && !covered && chkPlay.Value && P("동작", "멈춰있으면") != "") {
         if (StalledSec() < StallNeedSec())
             return
@@ -5476,6 +5482,11 @@ Act(root, st)
         if PressByName(root, P("동작", "멈춰있으면")) {
             holdUntil := A_TickCount + 6000
             lastTimeTick := A_TickCount          ; 누른 뒤 다시 처음부터 지켜본다
+            playMissNoted := false
+        } else if !playMissNoted {
+            ; 2분 '멈춤' 알림까지 기다리지 않고 바로 알린다 (프로필에 맞는 재생 단추가 없음)
+            playMissNoted := true
+            Notify("영상이 멈춰 있는데 재생 단추를 못 찾았습니다. 강의 화면에서 재생을 눌러 주세요.")
         }
     }
 }
